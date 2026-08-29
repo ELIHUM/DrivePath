@@ -546,13 +546,13 @@ export default async function InstructorProfilePage({
 
               {/* Action buttons */}
               <div className="flex flex-col gap-3">
-                <button
-                  type="button"
+                <Link
+                  href={`/bookings/${id}`}
                   className="w-full flex items-center justify-center gap-2 bg-navy text-white text-sm font-semibold py-3 px-5 rounded-xl hover:bg-navy-dark transition-colors"
                 >
                   <IconCalendarCheck />
                   Réserver une leçon
-                </button>
+                </Link>
                 <button
                   type="button"
                   className="w-full flex items-center justify-center gap-2 bg-white text-navy text-sm font-semibold py-3 px-5 rounded-xl border-2 border-navy/15 hover:border-navy/40 transition-colors"
