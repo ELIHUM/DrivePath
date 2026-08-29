@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cp /c/Users/elihu/Downloads/drive-path-logo-kit/a_clean_flat_brand_identity_logo_variations_p.png /c/Users/elihu/Downloads/DrivePath/public/brand/brand-kit-variations.png)",
+      "Bash(cp /c/Users/elihu/Downloads/drive-path-logo-kit/a_clean_flat_brand_identity_kit_logo_system_p.png /c/Users/elihu/Downloads/DrivePath/public/brand/brand-kit-complete.png)",
+      "Bash(cp /c/Users/elihu/Downloads/drive-path-logo-kit/a_clean_high_resolution_transparent_png_style_b.png /c/Users/elihu/Downloads/DrivePath/public/brand/brand-kit-app.png)",
+      "Bash(cp /c/Users/elihu/Downloads/drive-path-logo-kit/a_clean_logo_on_transparent_graphic_wide_horizont.png /c/Users/elihu/Downloads/DrivePath/public/brand/logo-horizontal.png)",
+      "Bash(cp /c/Users/elihu/Downloads/drive-path-logo-kit/a_clean_logo_image_on_a_transparent_background_ch.png /c/Users/elihu/Downloads/DrivePath/public/brand/logo-white.png)",
+      "Bash(npx next:*)"
+    ]
+  }
+}
