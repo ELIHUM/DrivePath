@@ -94,7 +94,7 @@ const MOCK_INSTRUCTORS: Record<string, InstructorData> = {
     initials: "TM",
     avatarBg: "bg-navy",
     name: "Thomas M.",
-    city: "Lyon 3e",
+    city: "Moncton",
     rating: 4.8,
     reviewCount: 47,
     price: 45,
@@ -103,7 +103,7 @@ const MOCK_INSTRUCTORS: Record<string, InstructorData> = {
     initials: "SL",
     avatarBg: "bg-green-dp",
     name: "Sophie L.",
-    city: "Marseille 8e",
+    city: "Saint John",
     rating: 4.9,
     reviewCount: 82,
     price: 50,
@@ -112,7 +112,7 @@ const MOCK_INSTRUCTORS: Record<string, InstructorData> = {
     initials: "KB",
     avatarBg: "bg-[#5B7FA6]",
     name: "Karim B.",
-    city: "Paris 15e",
+    city: "Fredericton",
     rating: 4.7,
     reviewCount: 31,
     price: 42,
@@ -137,8 +137,8 @@ const LESSON_TYPES = [
   },
   {
     id: "accompanied",
-    label: "Conduite accompagnée",
-    desc: "Idéal dès 15 ans",
+    label: "Conduite supervisée",
+    desc: "À partir de 16 ans",
   },
 ] as const;
 
@@ -329,7 +329,7 @@ export default function BookingPage({
 
             <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
               <span className="text-sm font-semibold text-navy">Total</span>
-              <span className="text-2xl font-bold text-navy">{price}€</span>
+              <span className="text-2xl font-bold text-navy">{price} $</span>
             </div>
           </div>
 
@@ -409,7 +409,7 @@ export default function BookingPage({
                   </div>
                 </div>
                 <div className="flex-shrink-0 text-right">
-                  <div className="text-xl font-bold text-navy">{instructor.price}€</div>
+                  <div className="text-xl font-bold text-navy">{instructor.price} $</div>
                   <div className="text-xs text-gray-400">/heure</div>
                 </div>
               </div>
@@ -509,7 +509,7 @@ export default function BookingPage({
                     >
                       <span className="text-sm font-bold">{dur.label}</span>
                       <span className={`text-xs mt-1 ${isSelected ? "text-white/70" : "text-gray-400"}`}>
-                        {durPrice}€
+                        {durPrice} $
                       </span>
                     </button>
                   );
@@ -585,7 +585,7 @@ export default function BookingPage({
               <div className="flex items-baseline justify-between mt-4 pt-4 border-t border-gray-100">
                 <span className="text-sm font-semibold text-navy">Total</span>
                 <div className="text-right">
-                  <span className="text-2xl font-bold text-navy">{price}€</span>
+                  <span className="text-2xl font-bold text-navy">{price} $</span>
                 </div>
               </div>
 

@@ -129,7 +129,7 @@ const MOCK_PROFILES: Record<string, InstructorProfile> = {
     initials: "TM",
     avatarBg: "bg-navy",
     name: "Thomas M.",
-    city: "Lyon 3e",
+    city: "Moncton",
     rating: 4.8,
     reviewCount: 47,
     yearsExperience: 10,
@@ -142,7 +142,7 @@ const MOCK_PROFILES: Record<string, InstructorProfile> = {
       "Débutants",
       "Perfectionnement",
       "Code de la route",
-      "Conduite accompagnée",
+      "Conduite supervisée",
     ],
     about:
       "Moniteur agréé depuis 10 ans, je mets un point d'honneur à adapter chaque leçon au rythme et au niveau de mon élève. Mon objectif est simple : vous donner confiance au volant dans les meilleures conditions de sécurité.\n\nJ'ai accompagné plus de 150 élèves à travers l'ensemble de leur parcours, du premier cours à l'obtention du permis. Que vous soyez grand débutant ou que vous cherchiez à perfectionner votre conduite, je vous proposerai un accompagnement personnalisé et bienveillant.",
@@ -184,7 +184,7 @@ const MOCK_PROFILES: Record<string, InstructorProfile> = {
     initials: "SL",
     avatarBg: "bg-green-dp",
     name: "Sophie L.",
-    city: "Marseille 8e",
+    city: "Saint John",
     rating: 4.9,
     reviewCount: 82,
     yearsExperience: 8,
@@ -238,7 +238,7 @@ const MOCK_PROFILES: Record<string, InstructorProfile> = {
     initials: "KB",
     avatarBg: "bg-[#5B7FA6]",
     name: "Karim B.",
-    city: "Paris 15e",
+    city: "Fredericton",
     rating: 4.7,
     reviewCount: 31,
     yearsExperience: 5,
@@ -253,7 +253,7 @@ const MOCK_PROFILES: Record<string, InstructorProfile> = {
       "Perfectionnement",
     ],
     about:
-      "Moniteur agréé depuis 5 ans, je propose des leçons adaptées à tous les profils dans Paris et sa petite couronne. Flexible sur les horaires, je m'adapte à votre emploi du temps.\n\nJe travaille avec une approche bienveillante et pragmatique : chaque leçon est construite en fonction de vos besoins réels, pas d'un programme figé.",
+      "Moniteur certifié depuis 5 ans, je propose des leçons adaptées à tous les profils dans la région de Fredericton. Flexible sur les horaires, je m'adapte à votre emploi du temps.\n\nJe travaille avec une approche bienveillante et pragmatique : chaque leçon est construite en fonction de vos besoins réels, pas d'un programme figé.",
     availability: [
       { day: "Lun", full: "Lundi", slots: "08:00 – 19:00" },
       { day: "Mar", full: "Mardi", slots: null },
@@ -537,7 +537,7 @@ export default async function InstructorProfilePage({
             {/* Pricing card */}
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
               <div className="flex items-baseline gap-1 mb-1">
-                <span className="text-4xl font-bold text-navy">{profile.price}€</span>
+                <span className="text-4xl font-bold text-navy">{profile.price} $</span>
                 <span className="text-sm text-gray-400">/heure</span>
               </div>
               <p className="text-xs text-gray-400 mb-6">
@@ -578,7 +578,7 @@ export default async function InstructorProfilePage({
                 </span>
               </div>
               <p className="text-xs text-gray-500 leading-relaxed">
-                Ce moniteur a été vérifié par notre équipe : identité, agrément préfectoral et expérience contrôlés.
+                Ce moniteur a été vérifié par notre équipe : identité, permis provincial et expérience contrôlés.
               </p>
             </div>
 

@@ -112,12 +112,12 @@ const mockInstructors = [
     initials: "TM",
     avatarBg: "bg-navy",
     name: "Thomas M.",
-    city: "Lyon 3e",
+    city: "Moncton",
     rating: 4.8,
     reviews: 47,
     price: 45,
     experience: "10 ans d'expérience",
-    tags: ["Boîte manuelle", "Conduite accompagnée"],
+    tags: ["Boîte manuelle", "Conduite supervisée"],
     availability: "Disponible le week-end",
   },
   {
@@ -125,7 +125,7 @@ const mockInstructors = [
     initials: "SL",
     avatarBg: "bg-green-dp",
     name: "Sophie L.",
-    city: "Marseille 8e",
+    city: "Saint John",
     rating: 4.9,
     reviews: 82,
     price: 50,
@@ -138,7 +138,7 @@ const mockInstructors = [
     initials: "KB",
     avatarBg: "bg-[#5B7FA6]",
     name: "Karim B.",
-    city: "Paris 15e",
+    city: "Fredericton",
     rating: 4.7,
     reviews: 31,
     price: 42,
@@ -216,7 +216,7 @@ function InstructorCard({
         {/* Footer: price + CTA */}
         <div className="mt-auto flex items-center justify-between pt-4 border-t border-gray-100">
           <div className="flex items-baseline gap-1">
-            <span className="text-xl font-bold text-navy">{price}€</span>
+            <span className="text-xl font-bold text-navy">{price} $</span>
             <span className="text-xs text-gray-400">/heure</span>
           </div>
           <Link

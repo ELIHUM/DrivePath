@@ -147,7 +147,7 @@ function UpcomingBookingCard({ booking }: { booking: MockBooking }) {
       {/* Footer: price + CTA */}
       <div className="flex items-center justify-between pt-4 border-t border-gray-100 mt-auto gap-3 flex-wrap">
         <div>
-          <span className="text-xl font-bold text-navy">{booking.price}€</span>
+          <span className="text-xl font-bold text-navy">{booking.price} $</span>
           <span className="text-xs text-gray-400 ml-1">/séance</span>
         </div>
         <Link
@@ -196,7 +196,7 @@ function PastBookingCard({ booking }: { booking: MockBooking }) {
       {/* Footer */}
       <div className="flex items-center justify-between pt-4 border-t border-gray-100 mt-auto gap-3 flex-wrap">
         <div>
-          <span className="text-xl font-bold text-navy">{booking.price}€</span>
+          <span className="text-xl font-bold text-navy">{booking.price} $</span>
           <span className="text-xs text-gray-400 ml-1">/séance</span>
         </div>
         <div className="flex items-center gap-2">

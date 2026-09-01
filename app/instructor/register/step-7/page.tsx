@@ -205,7 +205,7 @@ export default function RegisterStep7() {
 
       <p className="text-xs text-gray-400 text-center mt-5 leading-relaxed max-w-sm mx-auto">
         En soumettant, vous confirmez que les informations renseignées sont exactes.
-        Drive-Path vérifiera votre agrément avant activation de votre profil.
+        Drive-Path vérifiera votre permis / licence avant activation de votre profil.
       </p>
     </PageShell>
   );

@@ -146,7 +146,7 @@ export default function TermsPage() {
               <p>
                 Les informations présentées sur les profils des moniteurs sont communiquées par
                 ceux-ci sous leur propre responsabilité. Drive-Path s&apos;efforce de vérifier les
-                informations essentielles (certification, agrément), mais ne peut garantir
+                informations essentielles (certification, permis), mais ne peut garantir
                 l&apos;exactitude ou l&apos;exhaustivité de l&apos;ensemble des informations affichées.
               </p>
             </div>

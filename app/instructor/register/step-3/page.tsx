@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   PageShell, StepProgress, FormCard, FieldWrapper,
@@ -22,11 +22,11 @@ const STATUSES = [
 ] as const;
 
 const SPECIALTIES = [
-  "Permis B",
-  "Conduite accompagnée",
+  "Classe 5 (véhicule de promenade)",
   "Conduite supervisée",
   "Perfectionnement",
   "Reprise de confiance",
+  "Conduite sur route / autoroute",
   "Conduite après obtention du permis",
 ] as const;
 
@@ -137,7 +137,7 @@ function validate(data: Step3Data): Errors {
   if (!data.status)
     errors.status = "Veuillez sélectionner votre statut professionnel.";
   if (!data.certificationNumber.trim())
-    errors.certificationNumber = "Le numéro d'agrément est obligatoire.";
+    errors.certificationNumber = "Le numéro de permis / licence est obligatoire.";
   if (!data.yearsExperience.trim()) {
     errors.yearsExperience = "L'expérience est obligatoire.";
   } else {
@@ -163,10 +163,14 @@ type PageState = Step3Data & { photoUrl: string | null };
 export default function RegisterStep3() {
   const router = useRouter();
 
-  const [form, setForm] = useState<PageState>(() => ({
-    ...loadStep<Step3Data>(3, DEFAULTS.step3),
+  const [form, setForm] = useState<PageState>({
+    ...DEFAULTS.step3,
     photoUrl: null,
-  }));
+  });
+
+  useEffect(() => {
+    setForm({ ...loadStep<Step3Data>(3, DEFAULTS.step3), photoUrl: null });
+  }, []);
   const [errors, setErrors] = useState<Errors>({});
   const [submitted, setSubmitted] = useState(false);
 

@@ -339,7 +339,7 @@ export default function BookingDetailPage({
                 <DetailRow label="Durée"        value={booking.duration} />
                 <DetailRow label="Type"         value={booking.lessonType} />
                 <DetailRow label="Lieu"         value={booking.instructorCity} />
-                <DetailRow label="Prix"         value={`${booking.price} €`} />
+                <DetailRow label="Prix"         value={`${booking.price} $`} />
                 <DetailRow label="Statut"       value={statusLabel(effectiveStatus)} />
               </div>
             </div>
@@ -385,7 +385,7 @@ export default function BookingDetailPage({
               <h2 className="font-bold text-navy mb-4">Récapitulatif</h2>
               <div className="flex items-baseline justify-between pt-3 border-t border-gray-100">
                 <span className="text-sm font-semibold text-navy">Total</span>
-                <span className="text-2xl font-bold text-navy">{booking.price}€</span>
+                <span className="text-2xl font-bold text-navy">{booking.price} $</span>
               </div>
             </div>
 
