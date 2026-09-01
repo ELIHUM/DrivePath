@@ -185,7 +185,7 @@ export default function HomePage() {
 
           {/* Card — Moniteur */}
           <Link
-            href="/login"
+            href="/instructor"
             className="group flex flex-col items-start gap-0 p-8 rounded-3xl bg-white text-navy
                        border-2 border-gray-100 hover:border-navy/20 hover:shadow-xl hover:-translate-y-1
                        transition-all duration-200 ease-out text-left"

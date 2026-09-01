@@ -49,6 +49,18 @@ function IconStarFilled() {
   );
 }
 
+function IconInfo() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="8" x2="12" y2="12" />
+      <line x1="12" y1="16" x2="12.01" y2="16" />
+    </svg>
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════
    TYPES
 ═══════════════════════════════════════════════════════════ */
@@ -243,7 +255,7 @@ function PageFooter() {
         </div>
         <nav className="flex items-center gap-6">
           <Link href="#" className="hover:text-gray-600 transition-colors">Confidentialité</Link>
-          <Link href="#" className="hover:text-gray-600 transition-colors">Conditions d&apos;utilisation</Link>
+          <Link href="/terms" className="hover:text-gray-600 transition-colors">Conditions d&apos;utilisation</Link>
           <Link href="#" className="hover:text-gray-600 transition-colors">Contact</Link>
         </nav>
       </div>
@@ -270,12 +282,14 @@ export default function BookingPage({
   const [selectedTime, setSelectedTime] = useState("");
   const [selectedDurationId, setSelectedDurationId] = useState<"1h" | "1h30" | "2h">("1h");
   const [selectedTypeId, setSelectedTypeId] = useState("");
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   /* ── Derived values ─────────────────────────── */
   const duration = DURATIONS.find((d) => d.id === selectedDurationId)!;
   const lessonType = LESSON_TYPES.find((t) => t.id === selectedTypeId);
   const price = Math.round(instructor.price * duration.multiplier);
-  const isValid = !!(selectedDate && selectedTime && selectedTypeId);
+  const formValid = !!(selectedDate && selectedTime && selectedTypeId);
+  const isValid = formValid && acceptedTerms;
 
   /* ════════════════════════════════════════════
      CONFIRMATION VIEW
@@ -322,7 +336,7 @@ export default function BookingPage({
           {/* Actions */}
           <div className="flex flex-col sm:flex-row gap-3">
             <Link
-              href="/bookings"
+              href="/learner/bookings"
               className="inline-flex items-center justify-center bg-navy text-white text-sm font-semibold px-6 py-3 rounded-xl hover:bg-navy-dark transition-colors"
             >
               Voir mes réservations
@@ -533,6 +547,25 @@ export default function BookingPage({
               </div>
             </SectionCard>
 
+            {/* À savoir — Niveau 1 */}
+            <div className="bg-surface border border-gray-200 rounded-2xl p-5">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-gray-400"><IconInfo /></span>
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-widest">À savoir</span>
+              </div>
+              <p className="text-sm text-gray-500 leading-relaxed mb-3">
+                Drive-Path facilite la mise en relation entre apprenants et moniteurs.
+                La prestation de conduite est réalisée directement entre vous et le moniteur.
+                Drive-Path n&apos;est pas partie à cette prestation.
+              </p>
+              <Link
+                href="/terms"
+                className="text-xs font-medium text-navy hover:underline underline-offset-2 transition-colors"
+              >
+                Consulter nos conditions d&apos;utilisation →
+              </Link>
+            </div>
+
           </div>
 
           {/* ── Right column: summary ── */}
@@ -556,12 +589,26 @@ export default function BookingPage({
                 </div>
               </div>
 
+              {/* Checkbox — Niveau 2 */}
+              <label className="flex items-start gap-3 mt-5 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={acceptedTerms}
+                  onChange={(e) => setAcceptedTerms(e.target.checked)}
+                  className="mt-0.5 flex-shrink-0 w-4 h-4 rounded border-gray-300 accent-navy cursor-pointer"
+                />
+                <span className="text-xs text-gray-500 leading-relaxed group-hover:text-gray-700 transition-colors">
+                  J&apos;ai compris que Drive-Path agit comme une plateforme de mise en relation et que
+                  la prestation de conduite est réalisée directement entre l&apos;apprenant et le moniteur.
+                </span>
+              </label>
+
               {/* Confirm button */}
               <button
                 type="button"
                 onClick={() => { if (isValid) setStep("confirmed"); }}
                 disabled={!isValid}
-                className={`mt-5 w-full py-3.5 rounded-xl text-sm font-semibold transition-all duration-150 ${
+                className={`mt-4 w-full py-3.5 rounded-xl text-sm font-semibold transition-all duration-150 ${
                   isValid
                     ? "bg-navy text-white hover:bg-navy-dark shadow-sm hover:shadow"
                     : "bg-gray-100 text-gray-400 cursor-not-allowed"
@@ -572,7 +619,9 @@ export default function BookingPage({
 
               {!isValid && (
                 <p className="text-xs text-gray-400 text-center mt-3 leading-relaxed">
-                  Sélectionnez une date, une heure et un type de leçon pour continuer.
+                  {!formValid
+                    ? "Sélectionnez une date, une heure et un type de leçon pour continuer."
+                    : "Veuillez cocher la case ci-dessus pour continuer."}
                 </p>
               )}
             </div>
