@@ -44,6 +44,10 @@ export type Step4Data = {
   lessonTypes: string[];
   pricePerHour: string;
   durations: string[];
+  /** Price string keyed by duration ID (e.g. "90 min" → "70") */
+  durationPrices: Record<string, string>;
+  /** Duration IDs whose price was manually edited by the instructor */
+  customizedPrices: string[];
   packages: string[];
 };
 
@@ -77,7 +81,7 @@ export const DEFAULTS: {
   step1: { firstName: "", lastName: "", email: "", phone: "", birthDate: "" },
   step2: { street: "", complement: "", city: "", postalCode: "", province: "", activityRadius: "" },
   step3: { status: "", certificationNumber: "", yearsExperience: "", specialties: [], bio: "" },
-  step4: { lessonTypes: [], pricePerHour: "", durations: [], packages: [] },
+  step4: { lessonTypes: [], pricePerHour: "", durations: [], durationPrices: {}, customizedPrices: [], packages: [] },
   step5: { brand: "", model: "", year: "", gearbox: "", color: "" },
   step6: { days: [], morning: false, afternoon: false, evening: false },
 };

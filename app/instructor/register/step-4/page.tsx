@@ -10,7 +10,7 @@ import { saveStep, loadStep, DEFAULTS } from "../_store";
 import type { Step4Data } from "../_store";
 
 /* ═══════════════════════════════════════════════════════════
-   DATA — Canadian context
+   DATA — Canadian context / Nouveau-Brunswick
 ═══════════════════════════════════════════════════════════ */
 
 const LESSON_TYPES = [
@@ -23,13 +23,15 @@ const LESSON_TYPES = [
   "Préparation à la conduite hivernale",
 ] as const;
 
-const DURATIONS = [
+type DurationDef = { id: string; label: string; badge?: string };
+
+const DURATIONS: readonly DurationDef[] = [
   { id: "30 min",  label: "30 min" },
   { id: "45 min",  label: "45 min" },
   { id: "60 min",  label: "60 min" },
-  { id: "90 min",  label: "90 min" },
-  { id: "120 min", label: "2 h" },
-] as const;
+  { id: "90 min",  label: "90 min",  badge: "⭐ Meilleur choix" },
+  { id: "120 min", label: "2 h",     badge: "🔥 Meilleure valeur" },
+];
 
 const PACKAGES = [
   "5 leçons",
@@ -38,10 +40,33 @@ const PACKAGES = [
 ] as const;
 
 /* ═══════════════════════════════════════════════════════════
+   PRICING LOGIC — marketing multipliers
+   60 min = tarif horaire de référence (1.0×)
+   Courtes séances : légèrement au-dessus du prorata → encourage les séances longues
+   Longues séances : remise progressive → encourage la montée en gamme
+═══════════════════════════════════════════════════════════ */
+
+const DURATION_MULTIPLIERS: Record<string, number> = {
+  "30 min":  0.60,  // 50 $/h → 30 $  (prorata = 25 $)
+  "45 min":  0.85,  // 50 $/h → 43 $  (prorata = 37,50 $)
+  "60 min":  1.00,  // tarif de référence
+  "90 min":  1.40,  // 50 $/h → 70 $  (prorata = 75 $) — remise
+  "120 min": 1.80,  // 50 $/h → 90 $  (prorata = 100 $) — remise plus importante
+};
+
+function suggestPrice(hourlyRate: number, durationId: string): string {
+  const mult = DURATION_MULTIPLIERS[durationId] ?? 1;
+  return String(Math.round(hourlyRate * mult));
+}
+
+/* ═══════════════════════════════════════════════════════════
    VALIDATION
 ═══════════════════════════════════════════════════════════ */
 
-type Errors = Partial<Record<keyof Omit<Step4Data, "packages">, string>>;
+type Errors = Partial<Record<
+  "lessonTypes" | "pricePerHour" | "durations" | "durationPrices",
+  string
+>>;
 
 function validate(data: Step4Data): Errors {
   const errors: Errors = {};
@@ -53,14 +78,27 @@ function validate(data: Step4Data): Errors {
     errors.pricePerHour = "Le tarif horaire est obligatoire.";
   } else {
     const n = Number(data.pricePerHour);
-    if (isNaN(n) || n <= 0)
-      errors.pricePerHour = "Le tarif doit être un nombre supérieur à 0.";
-    else if (n > 1000)
-      errors.pricePerHour = "Veuillez vérifier le tarif saisi.";
+    if (isNaN(n) || n < 10)
+      errors.pricePerHour = "Le tarif minimum est de 10 $.";
+    else if (n > 200)
+      errors.pricePerHour = "Le tarif maximum est de 200 $.";
   }
 
-  if (data.durations.length === 0)
+  if (data.durations.length === 0) {
     errors.durations = "Sélectionnez au moins une durée de leçon.";
+  } else {
+    for (const dur of data.durations) {
+      const price = data.durationPrices[dur];
+      if (!price || !price.trim()) {
+        errors.durationPrices = "Tous les tarifs par durée sont obligatoires.";
+        break;
+      }
+      if (isNaN(Number(price)) || Number(price) <= 0) {
+        errors.durationPrices = "Les tarifs par durée doivent être supérieurs à 0.";
+        break;
+      }
+    }
+  }
 
   return errors;
 }
@@ -71,46 +109,141 @@ function validate(data: Step4Data): Errors {
 
 export default function RegisterStep4() {
   const router = useRouter();
-  // Initialize with static defaults (SSR-safe) then restore from
-  // sessionStorage after mount to avoid hydration mismatch.
+
+  // SSR-safe: static defaults on first render, sessionStorage restored in useEffect
   const [form, setForm] = useState<Step4Data>(DEFAULTS.step4);
   const [errors, setErrors] = useState<Errors>({});
   const [submitted, setSubmitted] = useState(false);
 
   useEffect(() => {
-    setForm(loadStep<Step4Data>(4, DEFAULTS.step4));
+    const loaded = loadStep<Step4Data>(4, DEFAULTS.step4);
+    // Backwards compat: populate missing duration prices from hourly rate
+    // (happens when sessionStorage was saved before durationPrices was introduced)
+    const rate = Number(loaded.pricePerHour);
+    if (!isNaN(rate) && rate > 0 && loaded.durations.length > 0) {
+      const prices = { ...loaded.durationPrices };
+      let changed = false;
+      for (const dur of loaded.durations) {
+        if (!prices[dur]) {
+          prices[dur] = suggestPrice(rate, dur);
+          changed = true;
+        }
+      }
+      setForm(changed ? { ...loaded, durationPrices: prices } : loaded);
+    } else {
+      setForm(loaded);
+    }
   }, []);
 
-  /* ── Helpers ──────────────────────────────────────────── */
-
-  const update = <K extends keyof Step4Data>(key: K, value: Step4Data[K]) => {
+  /* ── Generic list toggle (lessonTypes, packages) ─────── */
+  const toggleList = (key: "lessonTypes" | "packages", val: string) => {
     setForm((prev) => {
-      const next = { ...prev, [key]: value };
+      const list = prev[key] as string[];
+      const next = {
+        ...prev,
+        [key]: list.includes(val) ? list.filter((v) => v !== val) : [...list, val],
+      };
       if (submitted) setErrors(validate(next));
       return next;
     });
   };
 
-  const toggleList = (key: "lessonTypes" | "durations" | "packages", val: string) => {
-    const list = form[key] as string[];
-    update(key, list.includes(val) ? list.filter((v) => v !== val) : [...list, val]);
+  /* ── Hourly rate change — recalculate non-customized prices ── */
+  const handleHourlyRateChange = (val: string) => {
+    setForm((prev) => {
+      const rate = Number(val);
+      const newDurationPrices = { ...prev.durationPrices };
+      if (!isNaN(rate) && rate > 0) {
+        for (const dur of prev.durations) {
+          if (!prev.customizedPrices.includes(dur)) {
+            newDurationPrices[dur] = suggestPrice(rate, dur);
+          }
+        }
+      }
+      const next = { ...prev, pricePerHour: val, durationPrices: newDurationPrices };
+      if (submitted) setErrors(validate(next));
+      return next;
+    });
+  };
+
+  /* ── Duration toggle — calculate suggested price on select ── */
+  const toggleDuration = (durId: string) => {
+    setForm((prev) => {
+      const list = prev.durations;
+      if (list.includes(durId)) {
+        // Deselect: remove price and customized flag
+        const newPrices = { ...prev.durationPrices };
+        delete newPrices[durId];
+        const next = {
+          ...prev,
+          durations: list.filter((d) => d !== durId),
+          durationPrices: newPrices,
+          customizedPrices: prev.customizedPrices.filter((d) => d !== durId),
+        };
+        if (submitted) setErrors(validate(next));
+        return next;
+      } else {
+        // Select: generate suggested price from current hourly rate
+        const rate = Number(prev.pricePerHour);
+        const newPrices = { ...prev.durationPrices };
+        if (!isNaN(rate) && rate > 0) {
+          newPrices[durId] = suggestPrice(rate, durId);
+        }
+        const next = {
+          ...prev,
+          durations: [...list, durId],
+          durationPrices: newPrices,
+          // not added to customizedPrices — it's a suggestion
+        };
+        if (submitted) setErrors(validate(next));
+        return next;
+      }
+    });
+  };
+
+  /* ── Individual duration price edit — mark as customized ── */
+  const handleDurationPriceChange = (durId: string, val: string) => {
+    setForm((prev) => {
+      const next = {
+        ...prev,
+        durationPrices: { ...prev.durationPrices, [durId]: val },
+        customizedPrices: prev.customizedPrices.includes(durId)
+          ? prev.customizedPrices
+          : [...prev.customizedPrices, durId],
+      };
+      if (submitted) setErrors(validate(next));
+      return next;
+    });
   };
 
   const handleContinue = () => {
     setSubmitted(true);
-    const errs = validate(form);
+
+    // Safety net: compute any missing duration prices from the hourly rate
+    // before validation, in case of timing edge cases or stale state.
+    const rate = Number(form.pricePerHour);
+    const ensuredPrices = { ...form.durationPrices };
+    if (!isNaN(rate) && rate > 0) {
+      for (const dur of form.durations) {
+        if (!ensuredPrices[dur]) {
+          ensuredPrices[dur] = suggestPrice(rate, dur);
+        }
+      }
+    }
+    const effectiveForm: Step4Data = { ...form, durationPrices: ensuredPrices };
+
+    const errs = validate(effectiveForm);
     setErrors(errs);
     if (Object.keys(errs).length === 0) {
-      saveStep<Step4Data>(4, form);
+      setForm(effectiveForm);
+      saveStep<Step4Data>(4, effectiveForm);
       router.push("/instructor/register/step-5");
     }
   };
 
-  /* ── Derived: estimated price per duration ────────────── */
-  const hourlyRate = Number(form.pricePerHour) || 0;
-  const durationMinutes: Record<string, number> = {
-    "30 min": 30, "45 min": 45, "60 min": 60, "90 min": 90, "120 min": 120,
-  };
+  /* ── Derived ──────────────────────────────────────────── */
+  // Durations in display order (preserving DURATIONS array order)
+  const selectedDurations = DURATIONS.filter((d) => form.durations.includes(d.id));
 
   return (
     <PageShell>
@@ -152,23 +285,25 @@ export default function RegisterStep4() {
         {/* ── Section 2 : Tarifs ── */}
         <FormCard title="Tarifs">
 
+          {/* Tarif horaire */}
           <FieldWrapper
             label="Tarif horaire ($ CAD)"
             htmlFor="pricePerHour"
             required
             error={errors.pricePerHour}
-            hint="Tarif de base pour 60 minutes de leçon."
+            hint="Tarif de référence pour 60 minutes. Minimum 10 $, maximum 200 $."
           >
             <TextInput
               id="pricePerHour"
               type="number"
               placeholder="65"
               value={form.pricePerHour}
-              onChange={(v) => update("pricePerHour", v)}
+              onChange={handleHourlyRateChange}
               hasError={!!errors.pricePerHour}
             />
           </FieldWrapper>
 
+          {/* Durées */}
           <FieldWrapper
             label="Durées de leçon proposées"
             htmlFor="durations"
@@ -182,39 +317,68 @@ export default function RegisterStep4() {
                   key={d.id}
                   label={d.label}
                   selected={form.durations.includes(d.id)}
-                  onClick={() => toggleList("durations", d.id)}
+                  onClick={() => toggleDuration(d.id)}
                 />
               ))}
             </div>
           </FieldWrapper>
 
-          {/* Estimated prices preview */}
-          {hourlyRate > 0 && form.durations.length > 0 && (
-            <div className="bg-surface rounded-xl border border-gray-100 p-4">
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
-                Tarifs estimés par durée
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {form.durations.map((d) => {
-                  const mins = durationMinutes[d] ?? 60;
-                  const price = Math.round(hourlyRate * mins / 60);
-                  const dLabel = DURATIONS.find((x) => x.id === d)?.label ?? d;
+          {/* Tarif par durée — affiché dès qu'une durée est sélectionnée */}
+          {selectedDurations.length > 0 && (
+            <FieldWrapper
+              label="Vos tarifs par durée"
+              htmlFor="durationPrices"
+              required
+              error={errors.durationPrices}
+              hint="Calculés automatiquement à partir de votre tarif horaire. Modifiez librement chaque montant."
+            >
+              <div className="flex flex-col gap-3">
+                {selectedDurations.map((d) => {
+                  const priceVal = form.durationPrices[d.id] ?? "";
+                  const isCustomized = form.customizedPrices.includes(d.id);
+                  const hasErr =
+                    submitted &&
+                    (!priceVal.trim() || isNaN(Number(priceVal)) || Number(priceVal) <= 0);
+
                   return (
-                    <div
-                      key={d}
-                      className="flex items-center gap-2 bg-white border border-gray-100 rounded-lg px-3 py-2"
-                    >
-                      <span className="text-xs text-gray-500">{dLabel}</span>
-                      <span className="text-xs font-bold text-navy">{price} $</span>
+                    <div key={d.id} className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
+                      {/* Duration label */}
+                      <span className="w-16 flex-shrink-0 text-sm font-semibold text-navy">
+                        {d.label}
+                      </span>
+
+                      {/* Price input */}
+                      <div className="w-28 flex-shrink-0">
+                        <TextInput
+                          id={`price-${d.id}`}
+                          type="number"
+                          placeholder="0"
+                          value={priceVal}
+                          onChange={(v) => handleDurationPriceChange(d.id, v)}
+                          hasError={hasErr}
+                        />
+                      </div>
+
+                      <span className="text-sm text-gray-400 flex-shrink-0">$ CAD</span>
+
+                      {/* Marketing badge */}
+                      {d.badge && (
+                        <span className="text-xs text-gray-500 flex-shrink-0">
+                          {d.badge}
+                        </span>
+                      )}
+
+                      {/* Customized indicator */}
+                      {isCustomized && (
+                        <span className="text-xs text-navy/40 flex-shrink-0 hidden sm:inline">
+                          personnalisé
+                        </span>
+                      )}
                     </div>
                   );
                 })}
               </div>
-              <p className="text-xs text-gray-400 mt-2 leading-relaxed">
-                Ces montants sont calculés automatiquement d&apos;après votre tarif horaire.
-                Les prix réels peuvent varier.
-              </p>
-            </div>
+            </FieldWrapper>
           )}
 
         </FormCard>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   PageShell, StepProgress, FormCard, FieldWrapper,
@@ -8,6 +8,7 @@ import {
 } from "./_shared";
 import { saveStep, loadStep, DEFAULTS } from "./_store";
 import type { Step1Data } from "./_store";
+import { saveProfilePhoto, clearProfilePhoto } from "@/lib/auth";
 
 /* ═══════════════════════════════════════════════════════════
    ICONS (step-specific)
@@ -62,7 +63,12 @@ function PhotoPicker({
   const handleFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    onSelect(URL.createObjectURL(file));
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      if (dataUrl) onSelect(dataUrl);
+    };
+    reader.readAsDataURL(file);
     e.target.value = "";
   }, [onSelect]);
 
@@ -152,12 +158,16 @@ function validate(data: FormData): Errors {
 export default function InstructorRegisterStep1() {
   const router = useRouter();
 
-  const [form, setForm] = useState<FormData>(() => ({
-    ...loadStep<Step1Data>(1, DEFAULTS.step1),
+  const [form, setForm] = useState<FormData>({
+    ...DEFAULTS.step1,
     photoUrl: null,
-  }));
+  });
   const [errors, setErrors] = useState<Errors>({});
   const [submitted, setSubmitted] = useState(false);
+
+  useEffect(() => {
+    setForm({ ...loadStep<Step1Data>(1, DEFAULTS.step1), photoUrl: null });
+  }, []);
 
   const update = <K extends keyof FormData>(key: K, value: FormData[K]) => {
     setForm((prev) => {
@@ -226,14 +236,14 @@ export default function InstructorRegisterStep1() {
         <FieldWrapper label="Photo de profil" htmlFor="photo">
           <PhotoPicker
             photoUrl={form.photoUrl}
-            onSelect={(url) => update("photoUrl", url)}
-            onRemove={() => update("photoUrl", null)}
+            onSelect={(url) => { saveProfilePhoto(url); update("photoUrl", url); }}
+            onRemove={() => { clearProfilePhoto(); update("photoUrl", null); }}
           />
         </FieldWrapper>
 
       </FormCard>
 
-      <NavButtons backHref="/instructor" onContinue={handleContinue} />
+      <NavButtons backHref="/instructor/account" onContinue={handleContinue} />
       <RequiredNotice />
     </PageShell>
   );

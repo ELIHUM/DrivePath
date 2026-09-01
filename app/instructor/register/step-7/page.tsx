@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { loadAll } from "../_store";
+import { loadAll, DEFAULTS } from "../_store";
 import { PageShell, StepProgress, IconArrowLeft } from "../_shared";
+import { finalizeAccount } from "@/lib/auth";
 
 /* ═══════════════════════════════════════════════════════════
    SUMMARY SECTION
@@ -89,7 +90,18 @@ function SuccessScreen() {
 ═══════════════════════════════════════════════════════════ */
 
 export default function RegisterStep7() {
-  const [data] = useState(() => loadAll());
+  const [data, setData] = useState({
+    step1: DEFAULTS.step1,
+    step2: DEFAULTS.step2,
+    step3: DEFAULTS.step3,
+    step4: DEFAULTS.step4,
+    step5: DEFAULTS.step5,
+    step6: DEFAULTS.step6,
+  });
+
+  useEffect(() => {
+    setData(loadAll());
+  }, []);
   const [isSubmitted, setIsSubmitted] = useState(false);
 
   const { step1, step2, step3, step4, step5, step6 } = data;
@@ -196,7 +208,10 @@ export default function RegisterStep7() {
         </Link>
         <button
           type="button"
-          onClick={() => setIsSubmitted(true)}
+          onClick={() => {
+            finalizeAccount(loadAll());
+            setIsSubmitted(true);
+          }}
           className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-green-dp text-white text-sm font-semibold px-8 py-3 rounded-xl hover:bg-green-dp/90 transition-colors shadow-sm"
         >
           Soumettre ma candidature
