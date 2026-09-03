@@ -4,9 +4,7 @@ import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  generateResetCode, saveResetToken, setFlowEmail,
-} from "@/lib/auth";
+import { setFlowEmail } from "@/lib/auth";
 
 /* ═══════════════════════════════════════════════════════════
    VALIDATION
@@ -49,27 +47,21 @@ export default function ForgotPasswordPage() {
     setLoading(true);
 
     try {
-      const code = generateResetCode();
       const normalized = email.toLowerCase().trim();
-
-      // Stocker le token localement (côté client)
-      saveResetToken(normalized, code);
       setFlowEmail(normalized);
 
-      // Envoyer le code par e-mail via l'API route
+      // Le code OTP est généré côté serveur — le client n'envoie que l'email
       const res = await fetch("/api/auth/reset-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: normalized, code }),
+        body: JSON.stringify({ email: normalized }),
       });
 
-      const data = await res.json() as { ok: boolean; devCode?: string };
+      const data = await res.json() as { ok: boolean; sentAt?: number };
 
-      // En mode dev sans Resend : stocker le code pour l'afficher sur la page suivante
-      if (data.devCode) {
-        try { sessionStorage.setItem("dp_reset_dev_code", data.devCode); } catch {}
-      } else {
-        try { sessionStorage.removeItem("dp_reset_dev_code"); } catch {}
+      // Stocker sentAt pour le cooldown sur la page de vérification
+      if (data.sentAt) {
+        try { sessionStorage.setItem("dp_reset_sent_at", String(data.sentAt)); } catch {}
       }
 
       // Toujours rediriger (ne jamais révéler si le compte existe)

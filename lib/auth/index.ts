@@ -36,6 +36,8 @@ export type AuthSession = {
   email: string;
   firstName: string;
   lastName: string;
+  /** Rôle Neon de l'utilisateur (ex. "instructor"). Absent pour les anciennes sessions. */
+  role?: string;
 };
 
 export type LoginResult =
@@ -145,27 +147,59 @@ export function isLoggedIn(): boolean {
 
 /* ── Connexion / Déconnexion ───────────────────────────── */
 
+/**
+ * Vérifie les identifiants auprès de /api/auth/login (Neon = source de vérité).
+ *
+ * ⚠️  TEMPORAIRE — La session reste stockée dans sessionStorage (dp_session)
+ * pour ne pas casser le reste du prototype tant que les cookies HttpOnly
+ * ne sont pas en place.
+ */
 export async function tryLogin(
   email: string,
   password: string,
 ): Promise<LoginResult> {
-  const account = getStoredAccount();
-  if (!account || account.email !== email.toLowerCase().trim()) {
+  let data: { ok: boolean; user?: { email: string; firstName: string; lastName: string; role: string } };
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    data = await res.json();
+  } catch {
     return { ok: false };
   }
-  const hash = await hashPassword(password);
-  if (account.passwordHash !== hash) return { ok: false };
+
+  if (!data.ok || !data.user) return { ok: false };
 
   const session: AuthSession = {
-    email: account.email,
-    firstName: account.firstName,
-    lastName: account.lastName,
+    email: data.user.email,
+    firstName: data.user.firstName,
+    lastName: data.user.lastName,
+    role: data.user.role,
   };
   saveSession(session);
   return { ok: true, session };
 }
 
-export function logout(): void {
+/**
+ * Déconnecte l'utilisateur.
+ *
+ * Mécanisme de sécurité principal : appelle /api/auth/logout, qui invalide
+ * la session dans Neon (table `sessions`) et supprime le cookie HttpOnly
+ * dp_session côté serveur.
+ *
+ * ⚠️  TEMPORAIRE — clearSession() (sessionStorage["dp_session"]) est
+ * conservé ensuite pour compatibilité avec le reste du prototype, mais
+ * n'est plus le mécanisme qui protège l'accès aux pages : c'est la
+ * session serveur invalidée ci-dessus qui fait foi.
+ */
+export async function logout(): Promise<void> {
+  try {
+    await fetch("/api/auth/logout", { method: "POST" });
+  } catch {
+    // Best-effort — le nettoyage local a lieu quoi qu'il arrive ci-dessous.
+  }
   clearSession();
 }
 
@@ -209,65 +243,12 @@ export function clearProfilePhoto(): void {
   try { localStorage.removeItem(PHOTO_KEY); } catch {}
 }
 
-/* ── Réinitialisation de mot de passe ──────────────────── */
+/* ── Flow de réinitialisation (sessionStorage) ─────────── */
+/*  Le code OTP est désormais généré et vérifié côté serveur. */
+/*  Ces helpers gèrent uniquement l'état de navigation du flux. */
 
-const RESET_KEY      = "dp_reset_pending";
-const FLOW_EMAIL_KEY = "dp_reset_email";
-const FLOW_DONE_KEY  = "dp_reset_verified";
-const RESET_TTL_MS   = 10 * 60 * 1_000; // 10 minutes
-export const RESET_COOLDOWN_S = 60;      // secondes entre deux envois
-
-export interface ResetToken {
-  email: string;
-  code: string;
-  expiresAt: number;
-  used: boolean;
-  sentAt: number;
-}
-
-export type VerifyResult = "valid" | "invalid" | "expired" | "used";
-
-/** Génère un code aléatoire à 6 chiffres via Web Crypto. */
-export function generateResetCode(): string {
-  const arr = new Uint32Array(1);
-  crypto.getRandomValues(arr);
-  return String(arr[0] % 1_000_000).padStart(6, "0");
-}
-
-export function saveResetToken(email: string, code: string): void {
-  const token: ResetToken = {
-    email: email.toLowerCase().trim(),
-    code,
-    expiresAt: Date.now() + RESET_TTL_MS,
-    used: false,
-    sentAt: Date.now(),
-  };
-  try { localStorage.setItem(RESET_KEY, JSON.stringify(token)); } catch {}
-}
-
-export function getResetToken(): ResetToken | null {
-  try {
-    const raw = localStorage.getItem(RESET_KEY);
-    return raw ? (JSON.parse(raw) as ResetToken) : null;
-  } catch { return null; }
-}
-
-export function clearResetToken(): void {
-  try { localStorage.removeItem(RESET_KEY); } catch {}
-}
-
-/** Vérifie le code saisi par l'utilisateur. */
-export function verifyResetCode(email: string, code: string): VerifyResult {
-  const token = getResetToken();
-  if (!token) return "invalid";
-  if (token.email !== email.toLowerCase().trim()) return "invalid";
-  if (token.used) return "used";
-  if (Date.now() > token.expiresAt) return "expired";
-  if (token.code !== code.trim()) return "invalid";
-  return "valid";
-}
-
-/* ── Flow sessionStorage ───────────────────────────────── */
+const FLOW_EMAIL_KEY       = "dp_reset_email";
+const FLOW_RESET_TOKEN_KEY = "dp_reset_token";  // token opaque émis par le serveur après OTP validé
 
 export function setFlowEmail(email: string): void {
   try { sessionStorage.setItem(FLOW_EMAIL_KEY, email.toLowerCase().trim()); } catch {}
@@ -275,33 +256,35 @@ export function setFlowEmail(email: string): void {
 export function getFlowEmail(): string | null {
   try { return sessionStorage.getItem(FLOW_EMAIL_KEY); } catch { return null; }
 }
-export function setFlowVerified(): void {
-  try { sessionStorage.setItem(FLOW_DONE_KEY, "1"); } catch {}
+
+/** Sauvegarde le reset token opaque émis par le serveur après vérification OTP. */
+export function saveFlowResetToken(token: string): void {
+  try { sessionStorage.setItem(FLOW_RESET_TOKEN_KEY, token); } catch {}
 }
-export function isFlowVerified(): boolean {
-  try { return sessionStorage.getItem(FLOW_DONE_KEY) === "1"; } catch { return false; }
+/** Récupère le reset token (guard de la page /reset). */
+export function getFlowResetToken(): string | null {
+  try { return sessionStorage.getItem(FLOW_RESET_TOKEN_KEY); } catch { return null; }
 }
+
 export function clearFlowState(): void {
   try {
     sessionStorage.removeItem(FLOW_EMAIL_KEY);
-    sessionStorage.removeItem(FLOW_DONE_KEY);
-    sessionStorage.removeItem("dp_reset_dev_code");
+    sessionStorage.removeItem(FLOW_RESET_TOKEN_KEY);
+    sessionStorage.removeItem("dp_reset_sent_at");
   } catch {}
 }
 
-/** Réinitialise le mot de passe du compte et invalide le token. */
-export async function resetPassword(email: string, newPassword: string): Promise<boolean> {
+/**
+ * Applique le nouveau hash de mot de passe reçu du serveur dans localStorage.
+ * Appelé après validation du reset token par /api/auth/reset-password.
+ *
+ * ⚠️  TEMPORAIRE — Mise à jour localStorage (prototype sans base de données).
+ * À remplacer par un appel DB côté serveur lors de l'étape d'intégration DB.
+ */
+export function applyPasswordReset(newPasswordHash: string): boolean {
   const account = getStoredAccount();
-  const normalized = email.toLowerCase().trim();
-  if (!account || account.email !== normalized) return false;
-  const passwordHash = await hashPassword(newPassword);
-  saveAccount({ ...account, passwordHash });
-  // Invalider le token
-  const token = getResetToken();
-  if (token) {
-    try { localStorage.setItem(RESET_KEY, JSON.stringify({ ...token, used: true })); } catch {}
-  }
-  clearResetToken();
+  if (!account) return false;
+  saveAccount({ ...account, passwordHash: newPasswordHash });
   clearFlowState();
   return true;
 }

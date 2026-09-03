@@ -4,15 +4,14 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  getFlowEmail, getResetToken, verifyResetCode,
-  setFlowVerified, generateResetCode, saveResetToken,
-  RESET_COOLDOWN_S,
-} from "@/lib/auth";
+import { getFlowEmail, saveFlowResetToken } from "@/lib/auth";
 
 /* ═══════════════════════════════════════════════════════════
    PAGE — Étape 2 : Vérification du code OTP
+   Le code est vérifié côté serveur via POST /api/auth/verify-reset-code.
 ═══════════════════════════════════════════════════════════ */
+
+const COOLDOWN_S = 60; // secondes entre deux renvois
 
 export default function VerifyPage() {
   const router = useRouter();
@@ -23,11 +22,10 @@ export default function VerifyPage() {
   const [loading, setLoading]     = useState(false);
   const [cooldown, setCooldown]   = useState(0);
   const [resending, setResending] = useState(false);
-  const [devCode, setDevCode]     = useState<string | null>(null);
 
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  /* ── Load flow state ───────────────────────────────────── */
+  /* ── Chargement de l'état du flow ──────────────────────── */
 
   useEffect(() => {
     const flowEmail = getFlowEmail();
@@ -37,22 +35,18 @@ export default function VerifyPage() {
     }
     setEmail(flowEmail);
 
-    // Dev code banner
+    // Cooldown initial depuis sentAt stocké par la page précédente
     try {
-      const dc = sessionStorage.getItem("dp_reset_dev_code");
-      if (dc) setDevCode(dc);
+      const sentAtStr = sessionStorage.getItem("dp_reset_sent_at");
+      if (sentAtStr) {
+        const elapsed   = Math.floor((Date.now() - Number(sentAtStr)) / 1000);
+        const remaining = COOLDOWN_S - elapsed;
+        if (remaining > 0) setCooldown(remaining);
+      }
     } catch {}
-
-    // Initial cooldown from sentAt
-    const token = getResetToken();
-    if (token) {
-      const elapsed = Math.floor((Date.now() - token.sentAt) / 1000);
-      const remaining = RESET_COOLDOWN_S - elapsed;
-      if (remaining > 0) setCooldown(remaining);
-    }
   }, [router]);
 
-  /* ── Cooldown timer ────────────────────────────────────── */
+  /* ── Timer de cooldown ─────────────────────────────────── */
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -65,17 +59,12 @@ export default function VerifyPage() {
     return () => clearInterval(id);
   }, [cooldown]);
 
-  /* ── OTP input handling ────────────────────────────────── */
+  /* ── Saisie OTP ────────────────────────────────────────── */
 
-  const focusNext = (index: number) => {
-    if (index < 5) inputRefs.current[index + 1]?.focus();
-  };
-  const focusPrev = (index: number) => {
-    if (index > 0) inputRefs.current[index - 1]?.focus();
-  };
+  const focusNext = (index: number) => { if (index < 5) inputRefs.current[index + 1]?.focus(); };
+  const focusPrev = (index: number) => { if (index > 0) inputRefs.current[index - 1]?.focus(); };
 
   const handleDigitChange = (index: number, val: string) => {
-    // Accept only digits, take last char if pasted multiple
     const digit = val.replace(/\D/g, "").slice(-1);
     const next = [...digits];
     next[index] = digit;
@@ -87,19 +76,11 @@ export default function VerifyPage() {
   const handleKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Backspace") {
       if (digits[index]) {
-        const next = [...digits];
-        next[index] = "";
-        setDigits(next);
-      } else {
-        focusPrev(index);
-      }
-    } else if (e.key === "ArrowLeft") {
-      focusPrev(index);
-    } else if (e.key === "ArrowRight") {
-      focusNext(index);
-    } else if (e.key === "Enter") {
-      void handleVerify();
-    }
+        const next = [...digits]; next[index] = ""; setDigits(next);
+      } else { focusPrev(index); }
+    } else if (e.key === "ArrowLeft")  { focusPrev(index); }
+    else if (e.key === "ArrowRight") { focusNext(index); }
+    else if (e.key === "Enter")      { void handleVerify(); }
   };
 
   const handlePaste = (e: React.ClipboardEvent) => {
@@ -110,63 +91,71 @@ export default function VerifyPage() {
     for (let i = 0; i < text.length; i++) next[i] = text[i];
     setDigits(next);
     setError("");
-    const lastFilled = Math.min(text.length, 5);
-    inputRefs.current[lastFilled]?.focus();
+    inputRefs.current[Math.min(text.length, 5)]?.focus();
   };
 
-  /* ── Verify ────────────────────────────────────────────── */
+  /* ── Vérification via API serveur ──────────────────────── */
 
   const handleVerify = useCallback(async () => {
     if (!email) return;
     const code = digits.join("");
-    if (code.length < 6) {
-      setError("Veuillez entrer les 6 chiffres du code.");
-      return;
-    }
+    if (code.length < 6) { setError("Veuillez entrer les 6 chiffres du code."); return; }
 
     setLoading(true);
     setError("");
     try {
-      const result = verifyResetCode(email, code);
-      if (result === "valid") {
-        setFlowVerified();
+      const res  = await fetch("/api/auth/verify-reset-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, code }),
+      });
+      const data = await res.json() as { ok: boolean; error?: string; resetToken?: string };
+
+      if (data.ok && data.resetToken) {
+        // Sauvegarder le reset token opaque (preuve de vérification OTP)
+        saveFlowResetToken(data.resetToken);
         router.push("/forgot-password/reset");
-      } else if (result === "expired") {
-        setError("Ce code a expiré. Veuillez en demander un nouveau.");
-      } else if (result === "used") {
-        setError("Ce code a déjà été utilisé. Veuillez en demander un nouveau.");
       } else {
-        setError("Code incorrect. Vérifiez et réessayez.");
+        switch (data.error) {
+          case "expired": setError("Ce code a expiré. Veuillez en demander un nouveau."); break;
+          case "used":    setError("Ce code a déjà été utilisé. Veuillez en demander un nouveau."); break;
+          default:        setError("Code incorrect. Vérifiez et réessayez.");
+        }
       }
+    } catch {
+      setError("Une erreur est survenue. Veuillez réessayer.");
     } finally {
       setLoading(false);
     }
   }, [email, digits, router]);
 
-  /* ── Resend ────────────────────────────────────────────── */
+  /* ── Renvoi du code (généré côté serveur) ──────────────── */
 
   const handleResend = async () => {
     if (!email || cooldown > 0 || resending) return;
     setResending(true);
     setError("");
     try {
-      const code = generateResetCode();
-      saveResetToken(email, code);
-
-      const res = await fetch("/api/auth/reset-code", {
+      const res  = await fetch("/api/auth/reset-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, code }),
+        body: JSON.stringify({ email }),
       });
+      const data = await res.json() as { ok: boolean; sentAt?: number; remainingMs?: number };
 
-      const data = await res.json() as { ok: boolean; devCode?: string };
-
-      if (data.devCode) {
-        setDevCode(data.devCode);
-        try { sessionStorage.setItem("dp_reset_dev_code", data.devCode); } catch {}
+      if (res.status === 429) {
+        // Le serveur applique encore un cooldown
+        const remaining = data.remainingMs ? Math.ceil(data.remainingMs / 1000) : COOLDOWN_S;
+        setCooldown(remaining);
+        return;
       }
 
-      setCooldown(RESET_COOLDOWN_S);
+      // Mettre à jour sentAt pour le prochain rechargement
+      if (data.sentAt) {
+        try { sessionStorage.setItem("dp_reset_sent_at", String(data.sentAt)); } catch {}
+      }
+
+      setCooldown(COOLDOWN_S);
       setDigits(["", "", "", "", "", ""]);
       inputRefs.current[0]?.focus();
     } finally {
@@ -174,10 +163,9 @@ export default function VerifyPage() {
     }
   };
 
-  /* ── Code all filled ───────────────────────────────────── */
   const allFilled = digits.every((d) => d !== "");
 
-  /* ── Render ────────────────────────────────────────────── */
+  /* ── Rendu ─────────────────────────────────────────────── */
 
   return (
     <main className="flex min-h-screen flex-col bg-surface">
@@ -195,14 +183,6 @@ export default function VerifyPage() {
       {/* Content */}
       <div className="flex-1 flex flex-col items-center justify-center px-6 py-16">
         <div className="w-full max-w-sm">
-
-          {/* Dev banner */}
-          {devCode && (
-            <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 leading-snug">
-              <span className="font-semibold">Mode développement — </span>
-              Code de test&nbsp;: <span className="font-mono font-bold tracking-widest">{devCode}</span>
-            </div>
-          )}
 
           {/* Heading */}
           <div className="text-center mb-8">
@@ -241,13 +221,12 @@ export default function VerifyPage() {
                   />
                 ))}
               </div>
-
               {error && (
                 <p className="mt-3 text-xs text-red-500 text-center leading-snug">{error}</p>
               )}
             </div>
 
-            {/* Verify button */}
+            {/* Bouton vérifier */}
             <button
               type="button"
               onClick={() => void handleVerify()}
@@ -265,7 +244,7 @@ export default function VerifyPage() {
               ) : "Vérifier le code"}
             </button>
 
-            {/* Resend */}
+            {/* Renvoi */}
             <div className="text-center text-sm">
               {cooldown > 0 ? (
                 <p className="text-gray-400">
@@ -286,7 +265,7 @@ export default function VerifyPage() {
 
           </div>
 
-          {/* Links */}
+          {/* Liens */}
           <div className="flex flex-col items-center gap-3 mt-6 text-sm text-gray-400">
             <Link href="/forgot-password" className="hover:text-gray-600 transition-colors">
               ← Modifier l&apos;adresse e-mail

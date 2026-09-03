@@ -1,20 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  generateOTPCode, storeOTP, getCooldownRemainingMs,
+} from "@/lib/otp-store";
 
 /* ═══════════════════════════════════════════════════════════
    POST /api/auth/reset-code
-   Body : { email: string, code: string }
+   Body : { email: string }
 
-   Envoie le code de réinitialisation par e-mail.
-   - Si RESEND_API_KEY est défini : envoi via Resend.
-   - Sinon (développement) : log console + devCode dans la réponse.
+   Génère un code OTP côté serveur, l'envoie par e-mail via Resend.
+   Le code n'est JAMAIS retourné dans la réponse HTTP.
 
-   SÉCURITÉ : toujours répondre { ok: true } pour ne pas
-   révéler si un compte existe.
+   SÉCURITÉ :
+   - Toujours répondre { ok: true } pour ne pas révéler si un compte existe.
+   - Le code est généré et stocké côté serveur uniquement.
+   - Le client n'envoie plus le code — il reçoit uniquement sentAt pour le cooldown.
 ═══════════════════════════════════════════════════════════ */
 
-const RESEND_KEY   = process.env.RESEND_API_KEY;
-const FROM_EMAIL   = process.env.RESET_FROM_EMAIL ?? "Drive-Path <noreply@drive-path.ca>";
-const IS_DEV       = process.env.NODE_ENV === "development";
+const RESEND_KEY = process.env.RESEND_API_KEY;
+const FROM_EMAIL = process.env.RESET_FROM_EMAIL ?? "Drive-Path <noreply@drive-path.ca>";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /* ── Template e-mail ───────────────────────────────────── */
 
@@ -88,15 +93,28 @@ function buildEmailHtml(code: string): string {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json() as { email?: string; code?: string };
+    const body = await req.json() as { email?: string };
     const email = (body.email ?? "").toLowerCase().trim();
-    const code  = (body.code  ?? "").trim();
 
-    if (!email || !code || !/^\d{6}$/.test(code)) {
+    if (!email || !EMAIL_RE.test(email)) {
       return NextResponse.json({ ok: false }, { status: 400 });
     }
 
-    const html = buildEmailHtml(code);
+    // Vérifier le cooldown côté serveur
+    const cooldownMs = getCooldownRemainingMs(email);
+    if (cooldownMs > 0) {
+      return NextResponse.json(
+        { ok: false, error: "cooldown", remainingMs: cooldownMs },
+        { status: 429 },
+      );
+    }
+
+    // Générer et stocker l'OTP côté serveur
+    const code   = generateOTPCode();
+    const sentAt = storeOTP(email, code);
+
+    // Envoyer le code par e-mail
+    const html    = buildEmailHtml(code);
     const subject = "Votre code de réinitialisation Drive-Path";
 
     if (RESEND_KEY) {
@@ -113,7 +131,7 @@ export async function POST(req: NextRequest) {
         console.error("[reset-code] Resend error:", await res.text());
       }
     } else {
-      /* ── Mode développement : log dans le terminal ── */
+      /* ── Mode développement : log dans le terminal uniquement ── */
       console.log(
         `\n╔══════════════════════════════════════╗` +
         `\n║  Drive-Path — Code de réinitialisation ║` +
@@ -125,17 +143,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    /* Toujours répondre ok : true (sécurité : ne pas révéler si le compte existe) */
-    const response: { ok: boolean; devCode?: string } = { ok: true };
-
-    /* En développement sans Resend : inclure le code dans la réponse pour les tests */
-    if (IS_DEV && !RESEND_KEY) {
-      response.devCode = code;
-    }
-
-    return NextResponse.json(response);
+    // Retourner sentAt pour le cooldown côté client — JAMAIS le code
+    return NextResponse.json({ ok: true, sentAt });
   } catch (err) {
     console.error("[reset-code] Unexpected error:", err);
-    return NextResponse.json({ ok: true }); // Ne jamais révéler l'erreur
+    // Ne jamais révéler l'erreur ni si le compte existe
+    return NextResponse.json({ ok: true, sentAt: Date.now() });
   }
 }

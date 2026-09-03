@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { getFlowEmail, isFlowVerified, resetPassword } from "@/lib/auth";
+import { getFlowEmail, getFlowResetToken, applyPasswordReset } from "@/lib/auth";
 
 /* ═══════════════════════════════════════════════════════════
    ICONS
@@ -86,7 +86,8 @@ function validate(password: string, confirm: string): Errors {
 export default function ResetPage() {
   const router = useRouter();
 
-  const [email, setEmail]       = useState<string | null>(null);
+  const [email, setEmail]         = useState<string | null>(null);
+  const [resetToken, setResetToken] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm]   = useState("");
   const [showPw, setShowPw]     = useState(false);
@@ -101,13 +102,14 @@ export default function ResetPage() {
   /* ── Guard ─────────────────────────────────────────────── */
 
   useEffect(() => {
-    const flowEmail = getFlowEmail();
-    const verified  = isFlowVerified();
-    if (!flowEmail || !verified) {
+    const flowEmail  = getFlowEmail();
+    const flowToken  = getFlowResetToken();
+    if (!flowEmail || !flowToken) {
       router.replace("/forgot-password");
       return;
     }
     setEmail(flowEmail);
+    setResetToken(flowToken);
   }, [router]);
 
   /* ── Handlers ──────────────────────────────────────────── */
@@ -132,16 +134,33 @@ export default function ResetPage() {
     const errs = validate(password, confirm);
     setErrors(errs);
     if (Object.keys(errs).length > 0) return;
-    if (!email) return;
+    if (!email || !resetToken) return;
 
     setLoading(true);
     try {
-      const ok = await resetPassword(email, password);
-      if (ok) {
-        setSuccess(true);
+      // Le serveur valide le reset token et retourne le hash du nouveau mot de passe
+      const res  = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resetToken, newPassword: password }),
+      });
+      const data = await res.json() as { ok: boolean; newPasswordHash?: string; error?: string };
+
+      if (data.ok && data.newPasswordHash) {
+        // Appliquer le hash reçu du serveur dans localStorage
+        const applied = applyPasswordReset(data.newPasswordHash);
+        if (applied) {
+          setSuccess(true);
+        } else {
+          setErrors({ password: "Impossible de mettre à jour le mot de passe. Veuillez recommencer." });
+        }
+      } else if (data.error === "token_invalid") {
+        setErrors({ password: "Session expirée. Veuillez recommencer la procédure." });
       } else {
         setErrors({ password: "Impossible de réinitialiser le mot de passe. Veuillez recommencer." });
       }
+    } catch {
+      setErrors({ password: "Une erreur est survenue. Veuillez réessayer." });
     } finally {
       setLoading(false);
     }
