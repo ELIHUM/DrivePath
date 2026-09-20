@@ -9,8 +9,8 @@ import { DEFAULTS, saveStep } from "../register/_store";
 import type { Step0Data, Step1Data, Step2Data, Step3Data, Step4Data, Step5Data, Step6Data } from "../register/_store";
 import { FieldWrapper, TextInput, SelectInput, TextareaInput, CheckOption, ToggleButton } from "../register/_shared";
 import {
-  getSession, getStoredAccount, createDraftAccount, logout,
-  getProfilePhoto, saveProfilePhoto, clearProfilePhoto, updateProfileAndSession,
+  getStoredAccount, createDraftAccount, logout,
+  getProfilePhoto, saveProfilePhoto, clearProfilePhoto,
 } from "@/lib/auth";
 import type { AuthSession, StoredAccount, ProfileData } from "@/lib/auth";
 // Import de type uniquement (erasé à la compilation) — ne tire aucun code
@@ -738,17 +738,59 @@ function DashboardView({
   const [currentAccount, setCurrentAccount] = useState<StoredAccount>(account);
   const [currentPhoto, setCurrentPhoto] = useState<string | null>(photoUrl);
   const [currentSession, setCurrentSession] = useState<AuthSession>(session);
+  const [saveError, setSaveError] = useState("");
 
   const profile = currentAccount.profile;
 
-  const handleSave = (section: Section, data: unknown, newPhoto?: string | null) => {
+  /**
+   * Enregistre une section modifiée du profil.
+   *
+   * Flux : formulaire → Neon (PUT /api/instructor/profile) → confirmation
+   * → mise à jour de l'interface.
+   *
+   * Neon est la source persistante principale — l'interface n'est mise à
+   * jour qu'après confirmation Neon. En cas d'échec : rien n'est mis à
+   * jour, le formulaire reste ouvert avec les données saisies, un message
+   * générique s'affiche.
+   *
+   * Fonctionne même si dp_account n'existe pas en localStorage : l'état
+   * React est mis à jour directement à partir des données confirmées par
+   * Neon (newProfile), jamais en relisant dp_account.
+   */
+  const handleSave = async (section: Section, data: unknown, newPhoto?: string | null) => {
     if (!profile) return;
     const newProfile: ProfileData = { ...profile, [section]: data };
-    updateProfileAndSession(newProfile);
-    const updated = getStoredAccount();
-    if (updated) setCurrentAccount(updated);
-    const updatedSession = getSession();
-    if (updatedSession) setCurrentSession(updatedSession);
+
+    setSaveError("");
+
+    let succeeded = false;
+    try {
+      const res = await fetch("/api/instructor/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newProfile),
+      });
+      const responseData = await res.json().catch(() => null) as { ok?: boolean } | null;
+      succeeded = res.ok && !!responseData?.ok;
+    } catch (err) {
+      console.error("[instructor/account] Échec de l'enregistrement du profil:", err);
+    }
+
+    if (!succeeded) {
+      setSaveError("Impossible d'enregistrer vos modifications. Veuillez réessayer.");
+      return; // Formulaire conservé ouvert, données saisies intactes.
+    }
+
+    // Interface mise à jour à partir des données confirmées par Neon —
+    // ne dépend pas de la présence de dp_account/dp_session.
+    setCurrentAccount((prev) => ({ ...prev, profile: newProfile }));
+    const s1 = newProfile.step1;
+    setCurrentSession((prev) => ({
+      ...prev,
+      firstName: s1.firstName.trim() || prev.firstName,
+      lastName:  s1.lastName.trim()  || prev.lastName,
+      email:     s1.email.trim()     || prev.email,
+    }));
     if (newPhoto !== undefined) { setCurrentPhoto(newPhoto); onPhotoChange(newPhoto); }
     setEditingSection(null);
   };
@@ -804,10 +846,15 @@ function DashboardView({
 
   // ── Edit form active ─────────────────────────────────
   if (editingSection !== null) {
-    const onBack = () => setEditingSection(null);
+    const onBack = () => { setSaveError(""); setEditingSection(null); };
     return (
       <div className="flex-1 max-w-2xl mx-auto w-full px-6 lg:px-0 py-10">
         {header}
+        {saveError && (
+          <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-600 leading-snug mb-4">
+            {saveError}
+          </div>
+        )}
         {editingSection === "step1" && (
           <EditStep1
             initial={profile.step1} initialPhoto={currentPhoto}
@@ -1057,6 +1104,32 @@ function CreationFieldWrapper({ label, htmlFor, required, error, children }: {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   CHARGEMENT DU PROFIL — Neon en priorité, localStorage en repli
+═══════════════════════════════════════════════════════════ */
+
+/**
+ * Construit l'objet StoredAccount attendu par DashboardView à partir d'un
+ * profil lu sur Neon. DashboardView ne lit jamais les champs de tête
+ * (email/passwordHash/firstName/lastName/createdAt) — seul `.profile`
+ * est affiché/édité — donc, quand le profil Neon existe, ces champs sont
+ * systématiquement dérivés de la session serveur (currentUser), jamais de
+ * dp_account : Neon n'a plus besoin de localAccount pour être affiché.
+ */
+function buildAccountFromNeonProfile(
+  neonProfile: ProfileData,
+  fallbackSession: { email: string; firstName: string; lastName: string },
+): StoredAccount {
+  return {
+    email: fallbackSession.email,
+    passwordHash: "", // jamais lu ni affiché par DashboardView
+    firstName: fallbackSession.firstName,
+    lastName: fallbackSession.lastName,
+    createdAt: new Date().toISOString(),
+    profile: neonProfile,
+  };
+}
+
+/* ═══════════════════════════════════════════════════════════
    PAGE
 ═══════════════════════════════════════════════════════════ */
 
@@ -1101,12 +1174,47 @@ export default function InstructorAccountClient({
   const [serverError, setServerError] = useState("");
 
   useEffect(() => {
-    if (isLoggedIn) {
-      setAccount(getStoredAccount());
-      setPhotoUrl(getProfilePhoto());
-    }
-    setAccountLoaded(true);
-  }, [isLoggedIn]);
+    if (!isLoggedIn) { setAccountLoaded(true); return; }
+
+    // Photo — hors scope de cette étape, reste localStorage comme avant.
+    setPhotoUrl(getProfilePhoto());
+
+    let cancelled = false;
+
+    (async () => {
+      const localAccount = getStoredAccount();
+
+      // Neon = source principale de lecture du profil ; dp_account.profile
+      // reste un fallback temporaire — jamais affiché en premier pour
+      // éviter un flash de données obsolètes avant l'arrivée de Neon.
+      try {
+        const res = await fetch("/api/instructor/profile");
+        const data = await res.json().catch(() => null) as
+          { ok?: boolean; profile?: ProfileData | null } | null;
+
+        if (cancelled) return;
+
+        if (res.ok && data?.ok && data.profile && currentUser) {
+          setAccount(buildAccountFromNeonProfile(data.profile, currentUser));
+        } else {
+          // Pas d'erreur réseau, mais pas de profil Neon (ok:true, profile:null)
+          // — repli sur dp_account.profile.
+          setAccount(localAccount);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error("[instructor/account] Échec du chargement du profil Neon — repli sur dp_account.profile :", err);
+          setAccount(localAccount);
+        }
+      } finally {
+        if (!cancelled) setAccountLoaded(true);
+      }
+    })();
+
+    return () => { cancelled = true; };
+    // currentUser (prop serveur) est référentiellement stable entre les
+    // rendus de ce composant — pas de re-déclenchement en boucle.
+  }, [isLoggedIn, currentUser]);
 
   const update = <K extends keyof CreationFormState>(key: K, value: CreationFormState[K]) => {
     setForm((prev) => { const next = { ...prev, [key]: value }; if (submitted) setErrors(validateCreation(next)); return next; });

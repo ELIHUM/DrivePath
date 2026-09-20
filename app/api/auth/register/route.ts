@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHash } from "crypto";
 import { eq } from "drizzle-orm";
 import { db, schema } from "@/lib/database";
+import { hashPasswordArgon2 } from "@/lib/auth/password";
+import { createSession } from "@/lib/auth/session";
 
 /* ═══════════════════════════════════════════════════════════
    POST /api/auth/register
@@ -15,20 +16,24 @@ import { db, schema } from "@/lib/database";
    - L'unicité de l'email est vérifiée avant insertion.
    - Aucun mot de passe ni hash n'est retourné dans la réponse.
 
-   ALGORITHME DE HASH (temporaire) :
-   SHA-256 avec préfixe statique "dp2024:" — identique au hash
-   client dans lib/auth/index.ts — maintenu pour compatibilité
-   avec le login localStorage actuel.
-   ⚠️  À remplacer par bcrypt/Argon2 lors de l'étape 3 de migration.
-═══════════════════════════════════════════════════════════ */
+   ALGORITHME DE HASH :
+   Argon2id (via hashPasswordArgon2() — lib/auth/password.ts) pour tout
+   nouveau compte. Le hash stocké est auto-descriptif ("$argon2id$...").
+   ⚠️  Les comptes existants créés avant cette étape ont encore un hash
+   SHA-256 legacy — ils restent gérés par lib/auth/password.ts
+   (hashPassword()/verifyPassword()) tant que login/reset-password n'ont
+   pas été migrés (prochaine étape).
 
-/**
- * Hash SHA-256 côté serveur — identique à hashPassword() dans lib/auth/index.ts.
- * ⚠️  Ne pas modifier indépendamment du client avant l'étape de migration du hash.
- */
-function hashPassword(password: string): string {
-  return createHash("sha256").update(`dp2024:${password}`).digest("hex");
-}
+   SESSION (nouveau) :
+   Une inscription réussie crée immédiatement une session serveur
+   (createSession() — cookie HttpOnly dp_session + table Neon `sessions`),
+   exactement comme /api/auth/login. Nécessaire car le parcours
+   d'inscription moniteur (app/instructor/register/*) enregistre ensuite
+   le profil dans Neon (POST /api/instructor/profile) en s'appuyant sur
+   l'utilisateur authentifié côté serveur — sans cette session, aucune
+   route ne pourrait déterminer en sécurité à quel compte rattacher le
+   profil soumis à la fin du formulaire.
+═══════════════════════════════════════════════════════════ */
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -70,19 +75,27 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "email_exists" });
     }
 
-    /* ── Hash côté serveur ─────────────────────────────── */
+    /* ── Hash côté serveur (Argon2id) ──────────────────── */
 
-    const passwordHash = hashPassword(password);
+    const passwordHash = await hashPasswordArgon2(password);
 
     /* ── Insertion dans Neon ───────────────────────────── */
 
-    await db.insert(schema.users).values({
+    const inserted = await db.insert(schema.users).values({
       email,
       passwordHash,
       firstName,
       lastName,
       role: "instructor",
-    });
+    }).returning({ id: schema.users.id });
+
+    const newUser = inserted[0];
+
+    /* ── Session serveur immédiate (auto-login) ────────── */
+
+    if (newUser) {
+      await createSession(newUser.id);
+    }
 
     // Ne retourner ni mot de passe ni hash
     return NextResponse.json({ ok: true });

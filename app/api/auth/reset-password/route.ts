@@ -1,38 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHash } from "crypto";
+import { eq } from "drizzle-orm";
+import { db, schema } from "@/lib/database";
 import { verifyAndConsumeResetToken } from "@/lib/otp-store";
+import { hashPasswordArgon2 } from "@/lib/auth/password";
 
 /* ═══════════════════════════════════════════════════════════
    POST /api/auth/reset-password
    Body : { resetToken: string, newPassword: string }
 
-   Valide le reset token (preuve de vérification OTP) et retourne
-   le hash du nouveau mot de passe pour mise à jour côté client.
+   Valide le reset token (preuve de vérification OTP), puis met à jour
+   directement users.password_hash dans Neon avec un hash Argon2id.
 
-   IMPORTANT — Architecture temporaire (prototype sans base de données) :
-   Le mot de passe est stocké dans localStorage du navigateur.
-   Le serveur valide le token, hash le mot de passe, et retourne le hash.
-   Le client applique le hash à son stockage local.
-
-   ⚠️  TODO (étape 3 du plan de migration) :
-   - Stocker et mettre à jour le mot de passe directement en base de données
-   - Remplacer SHA-256 par bcrypt ou Argon2
-   - Ne plus retourner le hash au client
+   Le mot de passe réinitialisé est désormais effectif sur le vrai compte
+   Neon — le flux ne dépend plus de localStorage pour ça (voir aussi
+   app/forgot-password/reset/page.tsx, adapté a minima pour ne plus
+   attendre de hash dans la réponse).
 
    SÉCURITÉ :
-   - Le reset token est à usage unique (consommé ici).
+   - Le reset token est opaque, à usage unique et expire — voir
+     verifyAndConsumeResetToken() dans lib/otp-store.ts (désormais
+     persisté dans Neon, table `reset_tokens` — voir schema.ts).
    - Sans reset token valide, le changement de mot de passe est refusé.
-   - Le nouveau mot de passe est hashé côté serveur avant tout retour.
-═══════════════════════════════════════════════════════════ */
+   - Le nouveau mot de passe est hashé en Argon2id côté serveur —
+     jamais via l'ancien SHA-256 legacy, jamais stocké en clair.
+   - Le hash n'est jamais inclus dans la réponse JSON : seul { ok: true }
+     confirme la réussite.
+   - Aucune erreur interne Neon n'est renvoyée au client.
+   - Une fois le mot de passe changé, TOUTES les sessions existantes de
+     ce compte (table `sessions`) sont supprimées — déconnecte les autres
+     appareils/navigateurs. Un échec de cette suppression ne prétend
+     jamais être un succès (voir gestion d'erreur dédiée ci-dessous).
 
-/**
- * Hash SHA-256 avec le même sel que le client (dp2024:).
- * ⚠️  Identique à hashPassword() dans lib/auth/index.ts — ne pas modifier
- * indépendamment avant l'étape de migration du hashage (étape 3).
- */
-function hashPassword(password: string): string {
-  return createHash("sha256").update(`dp2024:${password}`).digest("hex");
-}
+   ⚠️  Limite connue : verifyAndConsumeResetToken() consomme le token dès
+   qu'il est valide (vérification + consommation en un seul UPDATE ...
+   RETURNING atomique). Si la mise à jour Neon échoue ensuite (cas rare
+   — compte introuvable, erreur réseau), le token est déjà consommé et
+   l'utilisateur doit relancer la procédure de réinitialisation.
+═══════════════════════════════════════════════════════════ */
 
 export async function POST(req: NextRequest) {
   try {
@@ -44,18 +48,53 @@ export async function POST(req: NextRequest) {
     }
 
     // Vérifier et consommer le reset token (usage unique)
-    const tokenResult = verifyAndConsumeResetToken(resetToken);
+    const tokenResult = await verifyAndConsumeResetToken(resetToken);
     if (!tokenResult.ok) {
       return NextResponse.json({ ok: false, error: "token_invalid" });
     }
 
-    // Hasher le nouveau mot de passe côté serveur
-    const newPasswordHash = hashPassword(newPassword);
+    /* ── Récupérer l'utilisateur Neon correspondant ────── */
 
-    // Retourner le hash pour mise à jour localStorage (prototype sans DB)
-    return NextResponse.json({ ok: true, newPasswordHash });
+    const rows = await db
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(eq(schema.users.email, tokenResult.email))
+      .limit(1);
+
+    const user = rows[0];
+
+    // Compte introuvable dans Neon pour cet email — ne pas exposer de détail.
+    if (!user) {
+      return NextResponse.json({ ok: false, error: "server_error" }, { status: 500 });
+    }
+
+    /* ── Hash Argon2id + mise à jour Neon ──────────────── */
+
+    const newPasswordHash = await hashPasswordArgon2(newPassword);
+
+    await db
+      .update(schema.users)
+      .set({ passwordHash: newPasswordHash })
+      .where(eq(schema.users.id, user.id));
+
+    /* ── Révoquer toutes les sessions existantes de ce compte ─── */
+    /* Le mot de passe vient d'être changé — un échec ici ne doit    */
+    /* jamais être présenté comme un succès au client.               */
+
+    try {
+      await db.delete(schema.sessions).where(eq(schema.sessions.userId, user.id));
+    } catch (sessionErr) {
+      console.error(
+        "[reset-password] Mot de passe changé mais révocation des sessions échouée:",
+        sessionErr,
+      );
+      return NextResponse.json({ ok: false, error: "server_error" }, { status: 500 });
+    }
+
+    // Ne jamais retourner le hash — seule la confirmation compte.
+    return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[reset-password] Unexpected error:", err);
-    return NextResponse.json({ ok: false });
+    return NextResponse.json({ ok: false, error: "server_error" }, { status: 500 });
   }
 }

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHash } from "crypto";
 import { eq } from "drizzle-orm";
 import { db, schema } from "@/lib/database";
 import { createSession } from "@/lib/auth/session";
+import { verifyPassword, hashPasswordArgon2, isLegacyPasswordHash } from "@/lib/auth/password";
 
 /* ═══════════════════════════════════════════════════════════
    POST /api/auth/login
@@ -18,10 +18,13 @@ import { createSession } from "@/lib/auth/session";
      jamais si un email est enregistré ou non.
    - password_hash n'est jamais inclus dans la réponse.
 
-   ALGORITHME DE HASH (temporaire) :
-   SHA-256 avec préfixe statique "dp2024:" — identique au hash utilisé
-   par /api/auth/register et par lib/auth/index.ts.
-   ⚠️  À remplacer par bcrypt/Argon2 lors de l'étape 3 de migration.
+   HASHAGE (migration progressive — étape 4) :
+   verifyPassword() (lib/auth/password.ts) accepte les deux formats :
+   ancien SHA-256 "dp2024:" (comptes créés avant la migration) et
+   Argon2id "$argon2id$..." (nouveaux comptes depuis /api/auth/register).
+   Après une authentification réussie sur un hash encore legacy, le
+   mot de passe déjà vérifié est immédiatement re-hashé en Argon2id et
+   écrit dans Neon — migration transparente, sans action de l'utilisateur.
 
    SESSION SERVEUR (nouveau) :
    Une authentification réussie crée désormais une session Neon
@@ -33,15 +36,6 @@ import { createSession } from "@/lib/auth/session";
    en parallèle d'utiliser sessionStorage["dp_session"] pour ne pas
    casser le reste de l'app. Les deux mécanismes coexistent pour l'instant.
 ═══════════════════════════════════════════════════════════ */
-
-/**
- * Hash SHA-256 côté serveur — identique à hashPassword() dans
- * lib/auth/index.ts et app/api/auth/register/route.ts.
- * ⚠️  Ne pas modifier indépendamment avant l'étape de migration du hash.
- */
-function hashPassword(password: string): string {
-  return createHash("sha256").update(`dp2024:${password}`).digest("hex");
-}
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -78,11 +72,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "invalid_credentials" });
     }
 
-    /* ── Vérification du mot de passe ──────────────────── */
+    /* ── Vérification du mot de passe (legacy SHA-256 ou Argon2id) ── */
 
-    const passwordHash = hashPassword(password);
-    if (passwordHash !== user.passwordHash) {
+    const passwordValid = await verifyPassword(password, user.passwordHash);
+    if (!passwordValid) {
       return NextResponse.json({ ok: false, error: "invalid_credentials" });
+    }
+
+    /* ── Migration transparente : hash legacy → Argon2id ───────── */
+    /* Le mot de passe vient d'être vérifié correct. Un échec d'écriture */
+    /* ici ne doit jamais faire échouer un login par ailleurs valide.   */
+
+    if (isLegacyPasswordHash(user.passwordHash)) {
+      try {
+        const upgradedHash = await hashPasswordArgon2(password);
+        await db
+          .update(schema.users)
+          .set({ passwordHash: upgradedHash })
+          .where(eq(schema.users.id, user.id));
+      } catch (migrationErr) {
+        console.error("[login] Password hash migration failed:", migrationErr);
+        // Ne pas bloquer le login : l'authentification a déjà réussi.
+      }
     }
 
     /* ── Succès — créer la session serveur + cookie HttpOnly ─ */

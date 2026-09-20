@@ -1,61 +1,42 @@
 /*
  * ═══════════════════════════════════════════════════════════
- *   OTP Store — Stockage serveur temporaire (en mémoire)
+ *   OTP Store — Stockage persistant Neon
  *
- *   ⚠️  TEMPORAIRE — PROTOTYPE UNIQUEMENT
- *   Ce module utilise des Maps en mémoire du processus Node.js.
- *   Limitations :
- *     - Les données sont perdues au redémarrage du serveur
- *     - Non partagé entre instances serverless multiples
- *     - Ne convient pas à la production multi-instance
- *   À remplacer par une table `reset_tokens` en base de données
- *   lors de l'étape d'intégration DB (étape 4 du plan de migration).
+ *   Remplace l'ancien stockage en mémoire (Maps globalThis) par la
+ *   table Neon `reset_tokens` (lib/database/schema.ts, déjà conçue
+ *   pour ça — inchangée à cette étape, aucune migration nécessaire).
+ *
+ *   Deux types de lignes dans `reset_tokens` :
+ *     • "otp"   — Code à 6 chiffres envoyé par email (TTL 10 min).
+ *     • "reset" — Token opaque émis après OTP validé (TTL 15 min).
+ *
+ *   SÉCURITÉ :
+ *   - Ni le code OTP ni le reset token ne sont jamais stockés en clair —
+ *     seul leur hash SHA-256 (tokenHash) est écrit en base.
+ *   - usedAt : null = pas encore utilisé. Une ligne utilisée ou expirée
+ *     ne peut plus être validée (usage unique).
+ *   - Même API exposée qu'avant (mêmes noms de fonctions) — seules les
+ *     routes appelantes ont besoin d'ajouter `await` (fonctions désormais
+ *     asynchrones, car elles interrogent Neon).
  *
  *   ⚠️  SERVEUR UNIQUEMENT — Ne jamais importer depuis un composant client.
  * ═══════════════════════════════════════════════════════════
  */
 
-import { randomBytes } from "crypto";
+import { randomBytes, createHash } from "crypto";
+import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { db, schema } from "@/lib/database";
 
 export const OTP_TTL_MS         = 10 * 60 * 1_000;  // 10 minutes
 export const RESET_TOKEN_TTL_MS = 15 * 60 * 1_000;  // 15 min pour changer le mot de passe
 export const OTP_COOLDOWN_MS    = 60 * 1_000;        // 60 s entre deux envois
 
-/* ── Types ─────────────────────────────────────────────── */
-
-export interface OTPEntry {
-  code: string;
-  expiresAt: number;
-  used: boolean;
-  sentAt: number;
-}
-
-export interface ResetTokenEntry {
-  email: string;
-  expiresAt: number;
-  used: boolean;
-}
-
 export type VerifyOTPResult = "valid" | "invalid" | "expired" | "used";
 
-/* ── Stores (globalThis pour survivre au hot-reload en dev) */
+/* ── Hash (jamais de valeur brute en base) ─────────────── */
 
-const g = globalThis as typeof globalThis & {
-  __dpOtpStore?: Map<string, OTPEntry>;
-  __dpResetTokenStore?: Map<string, ResetTokenEntry>;
-};
-if (!g.__dpOtpStore)        g.__dpOtpStore        = new Map();
-if (!g.__dpResetTokenStore) g.__dpResetTokenStore = new Map();
-
-const otpStore: Map<string, OTPEntry>               = g.__dpOtpStore;
-const resetTokenStore: Map<string, ResetTokenEntry>  = g.__dpResetTokenStore;
-
-/* ── Nettoyage des entrées expirées ────────────────────── */
-
-function cleanup(): void {
-  const now = Date.now();
-  for (const [k, v] of otpStore)        if (v.expiresAt < now) otpStore.delete(k);
-  for (const [k, v] of resetTokenStore) if (v.expiresAt < now) resetTokenStore.delete(k);
+function hashValue(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 /* ── OTP ───────────────────────────────────────────────── */
@@ -66,19 +47,42 @@ export function generateOTPCode(): string {
   return String(num).padStart(6, "0");
 }
 
+/** Ligne "otp" la plus récente pour un email — fait office d'entrée unique par email. */
+async function getLatestOtpRow(email: string) {
+  const normalized = email.toLowerCase().trim();
+  const rows = await db
+    .select({
+      id:        schema.resetTokens.id,
+      tokenHash: schema.resetTokens.tokenHash,
+      expiresAt: schema.resetTokens.expiresAt,
+      usedAt:    schema.resetTokens.usedAt,
+      createdAt: schema.resetTokens.createdAt,
+    })
+    .from(schema.resetTokens)
+    .where(and(
+      eq(schema.resetTokens.email, normalized),
+      eq(schema.resetTokens.type, "otp"),
+    ))
+    .orderBy(desc(schema.resetTokens.createdAt))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 /**
- * Stocke un OTP pour l'adresse email donnée.
+ * Stocke un OTP pour l'adresse email donnée (hash uniquement).
  * Retourne le timestamp d'envoi (sentAt) pour le cooldown côté client.
  */
-export function storeOTP(email: string, code: string): number {
-  cleanup();
+export async function storeOTP(email: string, code: string): Promise<number> {
+  const normalized = email.toLowerCase().trim();
   const sentAt = Date.now();
-  otpStore.set(email.toLowerCase().trim(), {
-    code,
-    expiresAt: sentAt + OTP_TTL_MS,
-    used: false,
-    sentAt,
+
+  await db.insert(schema.resetTokens).values({
+    email:     normalized,
+    tokenHash: hashValue(code),
+    type:      "otp",
+    expiresAt: new Date(sentAt + OTP_TTL_MS),
   });
+
   return sentAt;
 }
 
@@ -86,27 +90,31 @@ export function storeOTP(email: string, code: string): number {
  * Retourne le délai restant avant de pouvoir renvoyer (en ms).
  * Retourne 0 si le cooldown est écoulé ou s'il n'y a pas d'entrée.
  */
-export function getCooldownRemainingMs(email: string): number {
-  const entry = otpStore.get(email.toLowerCase().trim());
-  if (!entry) return 0;
-  const remaining = OTP_COOLDOWN_MS - (Date.now() - entry.sentAt);
+export async function getCooldownRemainingMs(email: string): Promise<number> {
+  const row = await getLatestOtpRow(email);
+  if (!row) return 0;
+  const remaining = OTP_COOLDOWN_MS - (Date.now() - row.createdAt.getTime());
   return remaining > 0 ? remaining : 0;
 }
 
-/** Vérifie un code OTP sans le consommer. */
-export function verifyOTPCode(email: string, code: string): VerifyOTPResult {
-  const entry = otpStore.get(email.toLowerCase().trim());
-  if (!entry) return "invalid";
-  if (entry.used) return "used";
-  if (Date.now() > entry.expiresAt) return "expired";
-  if (entry.code !== code.trim()) return "invalid";
+/** Vérifie un code OTP sans le consommer (contre le dernier code envoyé pour cet email). */
+export async function verifyOTPCode(email: string, code: string): Promise<VerifyOTPResult> {
+  const row = await getLatestOtpRow(email);
+  if (!row) return "invalid";
+  if (row.usedAt) return "used";
+  if (Date.now() > row.expiresAt.getTime()) return "expired";
+  if (hashValue(code.trim()) !== row.tokenHash) return "invalid";
   return "valid";
 }
 
-/** Marque un OTP comme utilisé (ne peut plus être vérifié). */
-export function markOTPUsed(email: string): void {
-  const entry = otpStore.get(email.toLowerCase().trim());
-  if (entry) entry.used = true;
+/** Marque le dernier OTP envoyé à cet email comme utilisé (ne peut plus être vérifié). */
+export async function markOTPUsed(email: string): Promise<void> {
+  const row = await getLatestOtpRow(email);
+  if (!row) return;
+  await db
+    .update(schema.resetTokens)
+    .set({ usedAt: new Date() })
+    .where(eq(schema.resetTokens.id, row.id));
 }
 
 /* ── Reset Token ───────────────────────────────────────── */
@@ -118,24 +126,42 @@ export function generateResetToken(): string {
   return randomBytes(32).toString("hex");
 }
 
-/** Stocke un reset token associé à un email. */
-export function storeResetToken(token: string, email: string): void {
-  resetTokenStore.set(token, {
-    email: email.toLowerCase().trim(),
-    expiresAt: Date.now() + RESET_TOKEN_TTL_MS,
-    used: false,
+/** Stocke un reset token associé à un email (hash uniquement — jamais le token brut). */
+export async function storeResetToken(token: string, email: string): Promise<void> {
+  await db.insert(schema.resetTokens).values({
+    email:     email.toLowerCase().trim(),
+    tokenHash: hashValue(token),
+    type:      "reset",
+    expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS),
   });
 }
 
 /**
  * Vérifie et consomme un reset token (usage unique).
  * Retourne l'email associé si le token est valide.
+ *
+ * Implémenté comme un UPDATE ... WHERE usedAt IS NULL AND expiresAt > now()
+ * ... RETURNING atomique : deux requêtes concurrentes avec le même token ne
+ * peuvent pas toutes les deux réussir (la seconde ne matche plus aucune
+ * ligne dès que la première a posé usedAt).
  */
-export function verifyAndConsumeResetToken(
+export async function verifyAndConsumeResetToken(
   token: string,
-): { ok: true; email: string } | { ok: false } {
-  const entry = resetTokenStore.get(token);
-  if (!entry || entry.used || Date.now() > entry.expiresAt) return { ok: false };
-  entry.used = true;
-  return { ok: true, email: entry.email };
+): Promise<{ ok: true; email: string } | { ok: false }> {
+  const tokenHash = hashValue(token);
+  const now = new Date();
+
+  const rows = await db
+    .update(schema.resetTokens)
+    .set({ usedAt: now })
+    .where(and(
+      eq(schema.resetTokens.tokenHash, tokenHash),
+      eq(schema.resetTokens.type, "reset"),
+      isNull(schema.resetTokens.usedAt),
+      gt(schema.resetTokens.expiresAt, now),
+    ))
+    .returning({ email: schema.resetTokens.email });
+
+  const row = rows[0];
+  return row ? { ok: true, email: row.email } : { ok: false };
 }

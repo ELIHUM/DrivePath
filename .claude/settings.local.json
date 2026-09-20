@@ -22,7 +22,21 @@
       "Bash(npx drizzle-kit *)",
       "mcp__Neon__list_projects",
       "Bash(node _check_tables.mjs)",
-      "Bash(rm -f _check_tables.mjs)"
+      "Bash(rm -f _check_tables.mjs)",
+      "Bash(npm install *)",
+      "Bash(node -e \"console.log\\(require\\('./node_modules/argon2/package.json'\\).version\\)\")",
+      "Bash(npm audit *)",
+      "Bash(node -e \"const a=require\\('argon2'\\); console.log\\(Object.keys\\(a\\)\\);\")",
+      "Bash(node _argon2_smoke.mjs)",
+      "Bash(rm -f _argon2_smoke.mjs)",
+      "Bash(node _register_hash_check.mjs)",
+      "Bash(rm -f _register_hash_check.mjs)",
+      "Bash(node -e \"const d=require\\('drizzle-orm'\\); console.log\\(['and','eq','gt','isNull','desc'].every\\(k=>typeof d[k]==='function'\\)\\);\")",
+      "Bash(node _returning_check.mjs)",
+      "Bash(rm -f _returning_check.mjs)",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"ProcessId=27456\")",
+      "Bash(curl -s -i -X GET \"http://localhost:3000/api/instructor/profile\")",
+      "Bash(curl -s -i -X PUT \"http://localhost:3000/api/instructor/profile\" -H \"Content-Type: application/json\" -d '{}')"
     ]
   }
 }

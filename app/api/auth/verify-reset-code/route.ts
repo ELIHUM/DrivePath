@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "invalid" }, { status: 400 });
     }
 
-    const result = verifyOTPCode(email, code);
+    const result = await verifyOTPCode(email, code);
 
     if (result !== "valid") {
       // Retourner le motif d'erreur pour l'affichage client (expired, used, invalid)
@@ -38,11 +38,11 @@ export async function POST(req: NextRequest) {
     }
 
     // OTP valide — le consommer immédiatement (usage unique)
-    markOTPUsed(email);
+    await markOTPUsed(email);
 
     // Émettre un reset token opaque (preuve de vérification OTP)
     const resetToken = generateResetToken();
-    storeResetToken(resetToken, email);
+    await storeResetToken(resetToken, email);
 
     return NextResponse.json({ ok: true, resetToken });
   } catch (err) {

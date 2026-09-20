@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Vérifier le cooldown côté serveur
-    const cooldownMs = getCooldownRemainingMs(email);
+    const cooldownMs = await getCooldownRemainingMs(email);
     if (cooldownMs > 0) {
       return NextResponse.json(
         { ok: false, error: "cooldown", remainingMs: cooldownMs },
@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
 
     // Générer et stocker l'OTP côté serveur
     const code   = generateOTPCode();
-    const sentAt = storeOTP(email, code);
+    const sentAt = await storeOTP(email, code);
 
     // Envoyer le code par e-mail
     const html    = buildEmailHtml(code);

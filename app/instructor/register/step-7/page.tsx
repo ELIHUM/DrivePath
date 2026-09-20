@@ -103,6 +103,8 @@ export default function RegisterStep7() {
     setData(loadAll());
   }, []);
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
   const { step1, step2, step3, step4, step5, step6 } = data;
 
@@ -197,6 +199,12 @@ export default function RegisterStep7() {
 
       </div>
 
+      {submitError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-600 leading-snug mt-4">
+          {submitError}
+        </div>
+      )}
+
       {/* Navigation */}
       <div className="flex flex-col-reverse sm:flex-row items-center justify-between gap-4 mt-6">
         <Link
@@ -208,11 +216,43 @@ export default function RegisterStep7() {
         </Link>
         <button
           type="button"
-          onClick={() => {
-            finalizeAccount(loadAll());
-            setIsSubmitted(true);
+          disabled={submitting}
+          onClick={async () => {
+            setSubmitError("");
+            setSubmitting(true);
+            try {
+              const profile = loadAll();
+
+              // La sauvegarde Neon doit être confirmée AVANT de considérer
+              // la soumission comme réussie — voir gestion d'erreur ci-dessous.
+              const res  = await fetch("/api/instructor/profile", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(profile),
+              });
+              const responseData = await res.json().catch(() => null) as { ok?: boolean } | null;
+
+              if (!res.ok || !responseData?.ok) {
+                setSubmitError(
+                  "Votre candidature n'a pas pu être finalisée. Veuillez réessayer.",
+                );
+                return;
+              }
+
+              // Neon confirmé — on peut considérer la soumission comme réussie.
+              // Ancien système — conservé temporairement, inchangé.
+              finalizeAccount(profile);
+              setIsSubmitted(true);
+            } catch (err) {
+              console.error("[step-7] Échec de l'enregistrement du profil:", err);
+              setSubmitError(
+                "Votre candidature n'a pas pu être finalisée. Veuillez réessayer.",
+              );
+            } finally {
+              setSubmitting(false);
+            }
           }}
-          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-green-dp text-white text-sm font-semibold px-8 py-3 rounded-xl hover:bg-green-dp/90 transition-colors shadow-sm"
+          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-green-dp text-white text-sm font-semibold px-8 py-3 rounded-xl hover:bg-green-dp/90 transition-colors shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
         >
           Soumettre ma candidature
         </button>

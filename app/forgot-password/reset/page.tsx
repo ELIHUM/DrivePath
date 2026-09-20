@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { getFlowEmail, getFlowResetToken, applyPasswordReset } from "@/lib/auth";
+import { getFlowEmail, getFlowResetToken, clearFlowState } from "@/lib/auth";
 
 /* ═══════════════════════════════════════════════════════════
    ICONS
@@ -138,22 +138,17 @@ export default function ResetPage() {
 
     setLoading(true);
     try {
-      // Le serveur valide le reset token et retourne le hash du nouveau mot de passe
+      // Le serveur valide le reset token et met à jour le mot de passe dans Neon
       const res  = await fetch("/api/auth/reset-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ resetToken, newPassword: password }),
       });
-      const data = await res.json() as { ok: boolean; newPasswordHash?: string; error?: string };
+      const data = await res.json() as { ok: boolean; error?: string };
 
-      if (data.ok && data.newPasswordHash) {
-        // Appliquer le hash reçu du serveur dans localStorage
-        const applied = applyPasswordReset(data.newPasswordHash);
-        if (applied) {
-          setSuccess(true);
-        } else {
-          setErrors({ password: "Impossible de mettre à jour le mot de passe. Veuillez recommencer." });
-        }
+      if (data.ok) {
+        clearFlowState();
+        setSuccess(true);
       } else if (data.error === "token_invalid") {
         setErrors({ password: "Session expirée. Veuillez recommencer la procédure." });
       } else {

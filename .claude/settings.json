@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(npm run *)",
+      "Bash(npx eslint *)",
+      "Bash(node -e \"const d=require\\('drizzle-orm/pg-core'\\); console.log\\(['integer','boolean','numeric','jsonb','date','pgTable','uuid','varchar','text','timestamp','index'].every\\(k=>typeof d[k]==='function'\\)\\);\")",
+      "Bash(node _check_instructor_profiles.mjs)",
+      "Bash(rm -f _check_instructor_profiles.mjs)",
+      "Bash(node _diag_profiles.mjs)",
+      "Bash(rm -f _diag_profiles.mjs)",
+      "Bash(node _diag2.mjs)",
+      "Bash(netstat -ano)",
+      "Bash(tasklist //FI \"IMAGENAME eq node.exe\")"
+    ]
+  }
+}

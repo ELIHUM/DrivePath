@@ -3,9 +3,11 @@
  *   Schéma Drizzle — Drive-Path
  *
  *   Tables définies ici :
- *     • users        — Comptes utilisateurs (moniteurs, apprenants, admins)
- *     • reset_tokens — Codes OTP et tokens de réinitialisation de mot de passe
- *     • sessions     — Sessions serveur (préparation cookie HttpOnly)
+ *     • users                — Comptes utilisateurs (moniteurs, apprenants, admins)
+ *     • reset_tokens         — Codes OTP et tokens de réinitialisation de mot de passe
+ *     • sessions             — Sessions serveur (préparation cookie HttpOnly)
+ *     • instructor_profiles  — Profil moniteur complet (remplace progressivement
+ *                              dp_account.profile en localStorage)
  *
  *   ⚠️  SERVEUR UNIQUEMENT — Ne jamais importer depuis un composant client.
  * ═══════════════════════════════════════════════════════════
@@ -18,6 +20,11 @@ import {
   text,
   timestamp,
   index,
+  integer,
+  numeric,
+  jsonb,
+  boolean,
+  date,
 } from "drizzle-orm/pg-core";
 
 /* ══════════════════════════════════════════════════════════
@@ -166,6 +173,95 @@ export const sessions = pgTable(
   ],
 );
 
+/* ══════════════════════════════════════════════════════════
+   TABLE : instructor_profiles
+   Profil moniteur complet — destination cible de dp_account.profile
+   (localStorage), rempli aujourd'hui par le formulaire multi-étapes
+   app/instructor/register/ (step1 à step6).
+
+   Relation : instructor_profiles.user_id → users.id (1 profil par
+   utilisateur — contrainte d'unicité sur user_id).
+
+   ⚠️  Étape de CRÉATION DE SCHÉMA UNIQUEMENT : aucune route ne lit ni
+   n'écrit encore cette table. Le formulaire d'inscription continue
+   d'écrire dans dp_account.profile (localStorage) pour l'instant —
+   aucune donnée existante n'a été migrée ici.
+
+   Notes d'architecture :
+   - Colonnes regroupées et commentées par étape d'origine (step1..step6)
+     du formulaire — voir la correspondance exacte dans la doc de migration.
+   - durationPrices (step4) : dictionnaire { durée → tarif } dont les clés
+     dépendent des durées sélectionnées par le moniteur — forme variable,
+     stocké en JSONB pour ne perdre aucune donnée si le catalogue de
+     durées évolue, plutôt qu'en colonnes fixes par durée.
+   - Listes homogènes de chaînes (spécialités, jours, types de leçon,
+     durées, forfaits) : tableaux Postgres natifs (text[]), pas JSONB —
+     leur forme (liste de chaînes) est fixe, contrairement à durationPrices.
+   - pricePerHour : numeric(10,2), pas integer — le formulaire accepte des
+     tarifs décimaux (ex. 65,50 $), un entier perdrait cette précision.
+   - Champs optionnels dans le formulaire (complement, color, packages,
+     customizedPrices) : nullable. Le reste suit les règles de validation
+     actuelles de chaque étape (obligatoire côté formulaire → NOT NULL).
+══════════════════════════════════════════════════════════ */
+
+export const instructorProfiles = pgTable("instructor_profiles", {
+  id: uuid("id").defaultRandom().primaryKey(),
+
+  /** FK vers users.id — unique : un seul profil par utilisateur. */
+  userId: uuid("user_id").notNull().unique().references(() => users.id),
+
+  /* ── step1 — Informations personnelles ───────────────── */
+  firstName:     varchar("first_name", { length: 100 }).notNull(),
+  lastName:      varchar("last_name",  { length: 100 }).notNull(),
+  personalEmail: varchar("personal_email", { length: 255 }).notNull(),
+  phone:         varchar("phone", { length: 30 }).notNull(),
+  birthDate:     date("birth_date").notNull(),
+
+  /* ── step2 — Adresse et zone d'activité ──────────────── */
+  street:           varchar("street", { length: 255 }).notNull(),
+  complement:       varchar("complement", { length: 255 }),
+  city:             varchar("city", { length: 100 }).notNull(),
+  postalCode:       varchar("postal_code", { length: 10 }).notNull(),
+  province:         varchar("province", { length: 50 }).notNull(),
+  /** Rayon d'activité en km (options du formulaire : 5 / 10 / 20 / 50). */
+  activityRadiusKm: integer("activity_radius_km").notNull(),
+
+  /* ── step3 — Profil professionnel ────────────────────── */
+  professionalStatus:  varchar("professional_status", { length: 50 }).notNull(),
+  certificationNumber: varchar("certification_number", { length: 100 }).notNull(),
+  yearsExperience:     integer("years_experience").notNull(),
+  specialties:         text("specialties").array().notNull(),
+  bio:                 text("bio").notNull(),
+
+  /* ── step4 — Services et tarifs ──────────────────────── */
+  lessonTypes:  text("lesson_types").array().notNull(),
+  pricePerHour: numeric("price_per_hour", { precision: 10, scale: 2 }).notNull(),
+  durations:    text("durations").array().notNull(),
+  /** Dictionnaire { id de durée → tarif } — ex. { "60 min": "65" }. */
+  durationPrices:   jsonb("duration_prices").$type<Record<string, string>>().notNull(),
+  /** IDs de durée dont le tarif a été modifié manuellement (vs suggéré). */
+  customizedPrices: text("customized_prices").array(),
+  packages:         text("packages").array(),
+
+  /* ── step5 — Véhicule d'apprentissage ────────────────── */
+  vehicleBrand: varchar("vehicle_brand", { length: 100 }).notNull(),
+  vehicleModel: varchar("vehicle_model", { length: 100 }).notNull(),
+  vehicleYear:  integer("vehicle_year").notNull(),
+  /** "manual" | "automatic" */
+  gearbox:      varchar("gearbox", { length: 20 }).notNull(),
+  vehicleColor: varchar("vehicle_color", { length: 50 }),
+
+  /* ── step6 — Disponibilités ───────────────────────────── */
+  /** Codes jours 3 lettres : "lun".."dim". */
+  availableDays:      text("available_days").array().notNull(),
+  morningAvailable:   boolean("morning_available").notNull().default(false),
+  afternoonAvailable: boolean("afternoon_available").notNull().default(false),
+  eveningAvailable:   boolean("evening_available").notNull().default(false),
+
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 /* ── Types inférés ─────────────────────────────────────── */
 
 export type User       = typeof users.$inferSelect;
@@ -174,3 +270,5 @@ export type ResetToken = typeof resetTokens.$inferSelect;
 export type NewResetToken = typeof resetTokens.$inferInsert;
 export type Session    = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
+export type InstructorProfile    = typeof instructorProfiles.$inferSelect;
+export type NewInstructorProfile = typeof instructorProfiles.$inferInsert;
