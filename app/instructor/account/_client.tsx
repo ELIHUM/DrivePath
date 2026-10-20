@@ -9,7 +9,7 @@ import { DEFAULTS, saveStep } from "../register/_store";
 import type { Step0Data, Step1Data, Step2Data, Step3Data, Step4Data, Step5Data, Step6Data } from "../register/_store";
 import { FieldWrapper, TextInput, SelectInput, TextareaInput, CheckOption, ToggleButton } from "../register/_shared";
 import {
-  getStoredAccount, createDraftAccount, logout,
+  createDraftAccount, logout,
   getProfilePhoto, saveProfilePhoto, clearProfilePhoto,
 } from "@/lib/auth";
 import type { AuthSession, StoredAccount, ProfileData } from "@/lib/auth";
@@ -1104,16 +1104,18 @@ function CreationFieldWrapper({ label, htmlFor, required, error, children }: {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   CHARGEMENT DU PROFIL — Neon en priorité, localStorage en repli
+   CHARGEMENT DU PROFIL — Neon, source unique (étape 13C)
 ═══════════════════════════════════════════════════════════ */
 
 /**
  * Construit l'objet StoredAccount attendu par DashboardView à partir d'un
  * profil lu sur Neon. DashboardView ne lit jamais les champs de tête
  * (email/passwordHash/firstName/lastName/createdAt) — seul `.profile`
- * est affiché/édité — donc, quand le profil Neon existe, ces champs sont
- * systématiquement dérivés de la session serveur (currentUser), jamais de
- * dp_account : Neon n'a plus besoin de localAccount pour être affiché.
+ * est affiché/édité — donc ces champs sont systématiquement dérivés de la
+ * session serveur (currentUser), jamais de dp_account.
+ *
+ * C'est désormais le SEUL moyen de peupler `account` pour un utilisateur
+ * connecté : plus aucun profil n'est reconstruit depuis localStorage.
  */
 function buildAccountFromNeonProfile(
   neonProfile: ProfileData,
@@ -1127,6 +1129,72 @@ function buildAccountFromNeonProfile(
     createdAt: new Date().toISOString(),
     profile: neonProfile,
   };
+}
+
+/* ═══════════════════════════════════════════════════════════
+   ÉTAT SANS PROFIL — utilisateur connecté, aucun profil Neon affichable
+
+   Remplace l'ancien repli sur dp_account.profile (étape 13C).
+
+   Deux situations distinctes, jamais confondues :
+     • failed = false — Neon a répondu qu'aucun profil n'existe encore
+       pour ce compte. Le profil reste à compléter.
+     • failed = true  — le profil n'a pas pu être lu (réseau, 401, 500).
+       On n'affirme surtout pas qu'il est absent : on ne sait pas.
+
+   Dans les deux cas : aucune donnée n'est inventée ni reconstruite depuis
+   localStorage, et le formulaire de création de compte n'est jamais
+   proposé — le compte, lui, existe bien (session serveur valide).
+═══════════════════════════════════════════════════════════ */
+
+function ProfileUnavailable({
+  failed, onLogout,
+}: {
+  failed: boolean; onLogout: () => void;
+}) {
+  return (
+    <div className="flex-1 flex items-center justify-center px-6 py-16">
+      <div className="w-full max-w-md text-center">
+
+        <h1 className="text-2xl font-bold text-navy mb-3">
+          {failed ? "Profil momentanément indisponible" : "Profil non complété"}
+        </h1>
+
+        <p className="text-sm text-gray-400 leading-relaxed mb-8">
+          {failed
+            ? "Nous n'avons pas pu charger votre profil pour le moment. Aucune donnée n'a été perdue — veuillez réessayer dans un instant."
+            : "Votre compte est bien créé, mais votre profil de moniteur n'a pas encore été enregistré. Complétez-le pour accéder à votre tableau de bord."}
+        </p>
+
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+          {failed ? (
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="w-full sm:w-auto inline-flex items-center justify-center bg-navy text-white text-sm font-semibold px-6 py-3 rounded-xl hover:bg-navy-dark transition-colors shadow-sm"
+            >
+              Réessayer
+            </button>
+          ) : (
+            <Link
+              href="/instructor/register"
+              className="w-full sm:w-auto inline-flex items-center justify-center bg-navy text-white text-sm font-semibold px-6 py-3 rounded-xl hover:bg-navy-dark transition-colors shadow-sm"
+            >
+              Compléter mon profil
+            </Link>
+          )}
+          <button
+            type="button"
+            onClick={onLogout}
+            className="w-full sm:w-auto inline-flex items-center justify-center text-sm font-medium text-gray-500 hover:text-navy transition-colors px-6 py-3"
+          >
+            Se déconnecter
+          </button>
+        </div>
+
+      </div>
+    </div>
+  );
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -1162,9 +1230,13 @@ export default function InstructorAccountClient({
   const [account, setAccount] = useState<StoredAccount | null>(null);
   // Photo — always null on SSR, loaded client-side only
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
-  // Le profil local (StoredAccount/photo) reste lu depuis localStorage —
-  // seule la décision d'authentification vient désormais de currentUser.
+  // Le profil vient uniquement de Neon (étape 13C) — plus aucun repli
+  // localStorage ici. Seule la photo reste lue en local (hors scope).
   const [accountLoaded, setAccountLoaded] = useState(false);
+  // true = le chargement Neon a échoué (réseau/serveur). Distinct de
+  // « aucun profil » : on ne doit pas annoncer un profil à compléter
+  // alors qu'on n'a simplement pas réussi à le lire.
+  const [loadFailed, setLoadFailed] = useState(false);
 
   // Creation form state
   const [form, setForm] = useState<CreationFormState>({ ...DEFAULTS.step0, password: "", confirmPassword: "", acceptedTerms: false });
@@ -1182,11 +1254,10 @@ export default function InstructorAccountClient({
     let cancelled = false;
 
     (async () => {
-      const localAccount = getStoredAccount();
-
-      // Neon = source principale de lecture du profil ; dp_account.profile
-      // reste un fallback temporaire — jamais affiché en premier pour
-      // éviter un flash de données obsolètes avant l'arrivée de Neon.
+      // Neon est la seule source de lecture du profil (étape 13C) :
+      // dp_account.profile n'est plus consulté ici. Un profil absent reste
+      // absent — jamais reconstruit depuis localStorage, jamais complété
+      // par des valeurs par défaut — et l'interface l'annonce explicitement.
       try {
         const res = await fetch("/api/instructor/profile");
         const data = await res.json().catch(() => null) as
@@ -1196,15 +1267,25 @@ export default function InstructorAccountClient({
 
         if (res.ok && data?.ok && data.profile && currentUser) {
           setAccount(buildAccountFromNeonProfile(data.profile, currentUser));
+        } else if (res.ok && data?.ok) {
+          // Réponse valide, mais aucun profil en base (profile: null) —
+          // état vide assumé, ce n'est pas une erreur.
+          setAccount(null);
         } else {
-          // Pas d'erreur réseau, mais pas de profil Neon (ok:true, profile:null)
-          // — repli sur dp_account.profile.
-          setAccount(localAccount);
+          // Réponse d'erreur (401, 500…) : on ne peut rien affirmer sur
+          // l'existence du profil — état d'erreur, surtout pas état vide.
+          console.error(
+            "[instructor/account] Réponse inattendue au chargement du profil Neon — statut:",
+            res.status,
+          );
+          setAccount(null);
+          setLoadFailed(true);
         }
       } catch (err) {
         if (!cancelled) {
-          console.error("[instructor/account] Échec du chargement du profil Neon — repli sur dp_account.profile :", err);
-          setAccount(localAccount);
+          console.error("[instructor/account] Échec du chargement du profil Neon:", err);
+          setAccount(null);
+          setLoadFailed(true);
         }
       } finally {
         if (!cancelled) setAccountLoaded(true);
@@ -1282,7 +1363,7 @@ export default function InstructorAccountClient({
 
       {/* Content */}
       {isLoggedIn && !accountLoaded ? (
-        /* Loading — profil local (StoredAccount/photo) en cours de lecture */
+        /* Loading — profil en cours de lecture depuis Neon */
         <div className="flex-1 flex items-center justify-center">
           <div className="w-6 h-6 border-2 border-navy border-t-transparent rounded-full animate-spin" />
         </div>
@@ -1296,6 +1377,11 @@ export default function InstructorAccountClient({
           onLogout={handleLogout}
           onPhotoChange={setPhotoUrl}
         />
+
+      ) : isLoggedIn && session ? (
+        /* Connecté, mais aucun profil Neon affichable. Jamais le
+           formulaire de création de compte : le compte existe déjà. */
+        <ProfileUnavailable failed={loadFailed} onLogout={handleLogout} />
 
       ) : (
         /* Account creation form */

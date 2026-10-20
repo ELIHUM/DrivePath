@@ -5,6 +5,28 @@ import { getCurrentUser } from "@/lib/auth/session";
 import type { ProfileData } from "@/lib/auth";
 
 /* ═══════════════════════════════════════════════════════════
+   CONTRÔLE D'ACCÈS COMMUN AUX TROIS HANDLERS (étape 17)
+
+   Les trois routes appliquent la même règle, dans cet ordre :
+     1. Pas de session valide          → 401 not_authenticated
+     2. Session valide, rôle ≠ moniteur → 403 forbidden
+     3. Sinon, accès limité à SON PROPRE profil (user.id de la session)
+
+   Le rôle provient exclusivement de `users.role` dans Neon : getCurrentUser()
+   (lib/auth/session.ts) le lit par jointure entre `sessions` et `users` à
+   partir de l'empreinte du cookie HttpOnly. Il n'est donc jamais fourni par
+   le navigateur, ni lu dans le corps de la requête, ni déductible d'un
+   paramètre client — le modifier exigerait d'écrire dans la base.
+
+   La page app/instructor/account/page.tsx effectuait déjà cette vérification
+   de rôle avant tout rendu ; l'API, elle, ne la faisait pas alors qu'elle est
+   directement atteignable. Les trois handlers sont désormais alignés sur elle.
+═══════════════════════════════════════════════════════════ */
+
+/** Seul rôle autorisé à lire et écrire un profil moniteur. */
+const INSTRUCTOR_ROLE = "instructor";
+
+/* ═══════════════════════════════════════════════════════════
    GET /api/instructor/profile
 
    Retourne le profil moniteur de l'utilisateur actuellement authentifié,
@@ -28,6 +50,10 @@ export async function GET() {
     const user = await getCurrentUser();
     if (!user) {
       return NextResponse.json({ ok: false, error: "not_authenticated" }, { status: 401 });
+    }
+    // Rôle issu de Neon via la session — voir le bloc en tête de fichier.
+    if (user.role !== INSTRUCTOR_ROLE) {
+      return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
     const rows = await db
@@ -250,6 +276,10 @@ export async function POST(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ ok: false, error: "not_authenticated" }, { status: 401 });
     }
+    // Rôle issu de Neon via la session — voir le bloc en tête de fichier.
+    if (user.role !== INSTRUCTOR_ROLE) {
+      return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
+    }
 
     const body = await req.json() as Partial<ProfileData>;
     const parsed = parseProfileBody(body);
@@ -312,6 +342,10 @@ export async function PUT(req: NextRequest) {
     const user = await getCurrentUser();
     if (!user) {
       return NextResponse.json({ ok: false, error: "not_authenticated" }, { status: 401 });
+    }
+    // Rôle issu de Neon via la session — voir le bloc en tête de fichier.
+    if (user.role !== INSTRUCTOR_ROLE) {
+      return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
     const body = await req.json() as Partial<ProfileData>;

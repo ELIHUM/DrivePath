@@ -2,7 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, schema } from "@/lib/database";
 import { createSession } from "@/lib/auth/session";
-import { verifyPassword, hashPasswordArgon2, isLegacyPasswordHash } from "@/lib/auth/password";
+import {
+  verifyPassword, verifyDummyPassword, hashPasswordArgon2, isLegacyPasswordHash,
+} from "@/lib/auth/password";
+import {
+  EMAIL_FAILURE_LIMIT, IP_FAILURE_LIMIT,
+  emailKey, ipKey, getTrustedClientIp,
+  reserveAttempt, releaseAttempt, maybePurgeExpiredAttempts,
+  type Reservation,
+} from "@/lib/auth/login-rate-limit";
 
 /* ═══════════════════════════════════════════════════════════
    POST /api/auth/login
@@ -35,9 +43,27 @@ import { verifyPassword, hashPasswordArgon2, isLegacyPasswordHash } from "@/lib/
    ⚠️  TEMPORAIRE — Le frontend (lib/auth/index.ts → tryLogin) continue
    en parallèle d'utiliser sessionStorage["dp_session"] pour ne pas
    casser le reste de l'app. Les deux mécanismes coexistent pour l'instant.
+
+   LIMITATION DES TENTATIVES (H1) — lib/auth/login-rate-limit.ts :
+   - 5 tentatives non réussies / 15 min par email normalisé (toujours),
+     20 / 15 min par IP (seulement si AUTH_CLIENT_IP_SOURCE est fiable).
+   - Limite atteinte → 429 { ok: false, error: "too_many_attempts",
+     retryAfter } + en-tête Retry-After, sans vérifier le mot de passe.
+     Réponse identique que la limite soit email ou IP, et que le compte
+     existe ou non.
+   - Email inconnu → vérification Argon2id factice (verifyDummyPassword)
+     pour ne pas répondre plus vite qu'un mauvais mot de passe.
+   - Connexion réussie → les tentatives réservées sont rendues.
 ═══════════════════════════════════════════════════════════ */
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function tooManyAttempts(retryAfterSeconds: number) {
+  return NextResponse.json(
+    { ok: false, error: "too_many_attempts", retryAfter: retryAfterSeconds },
+    { status: 429, headers: { "Retry-After": String(retryAfterSeconds) } },
+  );
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -49,6 +75,24 @@ export async function POST(req: NextRequest) {
     if (!email || !EMAIL_RE.test(email) || !password) {
       return NextResponse.json({ ok: false, error: "invalid_credentials" }, { status: 400 });
     }
+
+    /* ── Limitation (H1) : IP d'abord, puis email ──────── */
+    /* Une IP bloquée n'incrémente pas le compteur de l'email ciblé. */
+
+    await maybePurgeExpiredAttempts();
+
+    const reservations: Reservation[] = [];
+
+    const clientIp = getTrustedClientIp(req.headers);
+    if (clientIp) {
+      const ipResult = await reserveAttempt(ipKey(clientIp), IP_FAILURE_LIMIT);
+      if (!ipResult.allowed) return tooManyAttempts(ipResult.retryAfterSeconds);
+      reservations.push(ipResult.reservation);
+    }
+
+    const emailResult = await reserveAttempt(emailKey(email), EMAIL_FAILURE_LIMIT);
+    if (!emailResult.allowed) return tooManyAttempts(emailResult.retryAfterSeconds);
+    reservations.push(emailResult.reservation);
 
     /* ── Recherche de l'utilisateur ────────────────────── */
 
@@ -67,8 +111,10 @@ export async function POST(req: NextRequest) {
 
     const user = rows[0];
 
-    // Email inexistant → même erreur générique que mot de passe incorrect
+    // Email inexistant → même erreur générique que mot de passe incorrect,
+    // après le même coût Argon2id qu'une vraie vérification.
     if (!user) {
+      await verifyDummyPassword(password);
       return NextResponse.json({ ok: false, error: "invalid_credentials" });
     }
 
@@ -99,6 +145,14 @@ export async function POST(req: NextRequest) {
     /* ── Succès — créer la session serveur + cookie HttpOnly ─ */
 
     await createSession(user.id);
+
+    /* ── Succès : rendre les tentatives réservées (H1) ─────────── */
+    /* Un échec ici ne doit jamais faire échouer un login réussi.   */
+    try {
+      await Promise.all(reservations.map(releaseAttempt));
+    } catch (releaseErr) {
+      console.error("[login] Restitution des tentatives échouée:", releaseErr);
+    }
 
     /* Ne jamais retourner passwordHash ni le token de session. */
 

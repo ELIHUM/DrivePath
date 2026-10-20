@@ -42,7 +42,8 @@ export type AuthSession = {
 
 export type LoginResult =
   | { ok: true; session: AuthSession }
-  | { ok: false };
+  | { ok: false; error: "too_many_attempts"; retryAfterSeconds: number }
+  | { ok: false; error?: undefined };
 
 /* ── Clés de stockage ──────────────────────────────────── */
 
@@ -158,7 +159,12 @@ export async function tryLogin(
   email: string,
   password: string,
 ): Promise<LoginResult> {
-  let data: { ok: boolean; user?: { email: string; firstName: string; lastName: string; role: string } };
+  let data: {
+    ok: boolean;
+    error?: string;
+    retryAfter?: number;
+    user?: { email: string; firstName: string; lastName: string; role: string };
+  };
   try {
     const res = await fetch("/api/auth/login", {
       method: "POST",
@@ -168,6 +174,16 @@ export async function tryLogin(
     data = await res.json();
   } catch {
     return { ok: false };
+  }
+
+  // Limitation serveur (H1) — délai fourni par le serveur, en secondes.
+  if (data.error === "too_many_attempts") {
+    const seconds = Number(data.retryAfter);
+    return {
+      ok: false,
+      error: "too_many_attempts",
+      retryAfterSeconds: Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : 60,
+    };
   }
 
   if (!data.ok || !data.user) return { ok: false };
@@ -180,6 +196,15 @@ export async function tryLogin(
   };
   saveSession(session);
   return { ok: true, session };
+}
+
+/** Message de limitation (H1) à partir du délai serveur, en secondes. */
+export function tooManyAttemptsMessage(retryAfterSeconds: number): string {
+  if (retryAfterSeconds < 60) {
+    return "Trop de tentatives. Réessayez dans moins d'une minute.";
+  }
+  const minutes = Math.ceil(retryAfterSeconds / 60);
+  return `Trop de tentatives. Réessayez dans ${minutes} minute${minutes > 1 ? "s" : ""}.`;
 }
 
 /**

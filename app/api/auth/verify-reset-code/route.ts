@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  verifyOTPCode, markOTPUsed,
+  verifyOTPCode,
   generateResetToken, storeResetToken,
 } from "@/lib/otp-store";
 
@@ -18,6 +18,10 @@ import {
    - Le vrai code n'est jamais retourné au client.
    - Le reset token est opaque (64 chars hex aléatoires).
    - Chaque reset token est à usage unique et expire en 15 minutes.
+   - Au plus 5 essais par code (OTP_MAX_ATTEMPTS, lib/otp-store.ts) :
+     au 5e échec le code est invalidé et la réponse devient "locked" —
+     un nouveau code doit être demandé. Le compteur et la consommation
+     du code valide sont atomiques (voir verifyOTPCode()).
 ═══════════════════════════════════════════════════════════ */
 
 export async function POST(req: NextRequest) {
@@ -33,12 +37,11 @@ export async function POST(req: NextRequest) {
     const result = await verifyOTPCode(email, code);
 
     if (result !== "valid") {
-      // Retourner le motif d'erreur pour l'affichage client (expired, used, invalid)
+      // Motif d'erreur pour l'affichage client (expired, used, invalid, locked)
       return NextResponse.json({ ok: false, error: result });
     }
 
-    // OTP valide — le consommer immédiatement (usage unique)
-    await markOTPUsed(email);
+    // OTP valide — déjà consommé atomiquement par verifyOTPCode() (usage unique)
 
     // Émettre un reset token opaque (preuve de vérification OTP)
     const resetToken = generateResetToken();

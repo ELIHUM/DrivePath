@@ -115,6 +115,13 @@ export const resetTokens = pgTable(
     /** Date de consommation. null = pas encore utilisé (usage unique). */
     usedAt: timestamp("used_at", { withTimezone: true }),
 
+    /**
+     * Nombre de tentatives de validation (lignes "otp" uniquement).
+     * Incrémenté atomiquement à chaque essai — voir verifyOTPCode()
+     * dans lib/otp-store.ts. Au-delà de la limite, le code est invalidé.
+     */
+    attempts: integer("attempts").notNull().default(0),
+
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -261,6 +268,33 @@ export const instructorProfiles = pgTable("instructor_profiles", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/* ══════════════════════════════════════════════════════════
+   TABLE : login_attempts
+   Compteurs de limitation des tentatives de connexion (H1) —
+   voir lib/auth/login-rate-limit.ts et docs/security/auth-hardening.md.
+
+   - key : "email:<sha256>" ou "ip:<sha256>" — jamais d'email ni d'IP
+     en clair.
+   - Une seule ligne par clé, réutilisée d'une fenêtre à l'autre :
+     l'UPSERT remet count à 1 et window_start à now() quand la fenêtre
+     de 15 min est écoulée.
+   - window_start indexé pour la purge des lignes expirées.
+
+   Migration : db/migrations/h1_login_attempts.sql (appliquée à la main).
+══════════════════════════════════════════════════════════ */
+
+export const loginAttempts = pgTable(
+  "login_attempts",
+  {
+    key:         varchar("key", { length: 80 }).primaryKey(),
+    count:       integer("count").notNull().default(0),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("login_attempts_window_start_idx").on(table.windowStart),
+  ],
+);
 
 /* ── Types inférés ─────────────────────────────────────── */
 

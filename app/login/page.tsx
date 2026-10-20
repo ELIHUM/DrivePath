@@ -4,7 +4,7 @@ import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { tryLogin } from "@/lib/auth";
+import { tryLogin, tooManyAttemptsMessage } from "@/lib/auth";
 
 /* ═══════════════════════════════════════════════════════════
    ICONS
@@ -88,6 +88,8 @@ export default function LoginPage() {
       const result = await tryLogin(email, password);
       if (result.ok) {
         router.push("/instructor/account");
+      } else if (result.error === "too_many_attempts") {
+        setAuthError(tooManyAttemptsMessage(result.retryAfterSeconds));
       } else {
         setAuthError("Adresse e-mail ou mot de passe incorrect.");
       }
@@ -126,7 +128,7 @@ export default function LoginPage() {
 
             {/* Auth error */}
             {authError && (
-              <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-600 leading-snug">
+              <div role="alert" className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-600 leading-snug">
                 {authError}
               </div>
             )}

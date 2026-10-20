@@ -22,6 +22,12 @@ export default function ForgotPasswordPage() {
   const [emailError, setEmailError] = useState("");
   const [loading, setLoading]   = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  /* Erreur d'envoi côté serveur — distincte de emailError, qui ne
+     concerne que la validation du champ. Volontairement séparée pour
+     ne pas marquer l'adresse en rouge alors que le problème vient du
+     service d'envoi : ce serait trompeur et pourrait laisser croire
+     que l'adresse elle-même est en cause. */
+  const [serverError, setServerError] = useState("");
 
   const inputCls = (hasErr: boolean) =>
     `w-full rounded-xl border px-4 py-3 text-sm text-gray-800 placeholder-gray-400 outline-none transition-all
@@ -44,6 +50,7 @@ export default function ForgotPasswordPage() {
     const err = validate(email);
     if (err) { setEmailError(err); return; }
     setEmailError("");
+    setServerError("");
     setLoading(true);
 
     try {
@@ -57,15 +64,43 @@ export default function ForgotPasswordPage() {
         body: JSON.stringify({ email: normalized }),
       });
 
-      const data = await res.json() as { ok: boolean; sentAt?: number };
+      const data = await res.json().catch(() => null) as
+        { ok?: boolean; sentAt?: number; remainingMs?: number } | null;
+
+      /* ── Un code a déjà été envoyé très récemment (429) ────────── */
+      /* Rien n'a été renvoyé, mais le code précédent reste valide    */
+      /* (10 min) : on poursuit vers la saisie plutôt que de bloquer  */
+      /* l'utilisateur. Le compte à rebours sera rétabli par la page  */
+      /* de vérification au premier renvoi. Ce cas suit exactement le */
+      /* même chemin qu'un succès — indispensable, car seul un compte */
+      /* existant peut déclencher un 429 : le distinguer révélerait   */
+      /* l'existence du compte.                                       */
+      if (res.status === 429) {
+        router.push("/forgot-password/verify");
+        return;
+      }
+
+      /* ── Échec réel d'envoi (500, 502, 503…) ──────────────────── */
+      /* On ne redirige pas : l'utilisateur attendrait un code qui    */
+      /* n'arrivera jamais. Message générique — ni cause interne, ni  */
+      /* détail Resend, ni indication sur l'existence du compte.      */
+      if (!res.ok || !data?.ok) {
+        setServerError("L'envoi du code a échoué. Veuillez réessayer plus tard.");
+        return;
+      }
 
       // Stocker sentAt pour le cooldown sur la page de vérification
       if (data.sentAt) {
         try { sessionStorage.setItem("dp_reset_sent_at", String(data.sentAt)); } catch {}
       }
 
-      // Toujours rediriger (ne jamais révéler si le compte existe)
+      /* Demande acceptée. Une adresse sans compte reçoit volontairement
+         { ok: true, sentAt } côté serveur : elle passe donc ici comme
+         une autre, et rien ne permet de la distinguer. */
       router.push("/forgot-password/verify");
+    } catch {
+      // Panne réseau ou réponse illisible — même message générique.
+      setServerError("Une erreur est survenue. Veuillez réessayer plus tard.");
     } finally {
       setLoading(false);
     }
@@ -98,6 +133,11 @@ export default function ForgotPasswordPage() {
 
           {/* Form card */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 flex flex-col gap-4">
+            {serverError && (
+              <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-600 leading-snug">
+                {serverError}
+              </div>
+            )}
             <div className="flex flex-col gap-1.5">
               <label htmlFor="email" className="text-sm font-semibold text-navy">
                 Adresse e-mail <span className="text-red-400">*</span>

@@ -75,3 +75,26 @@ export async function verifyPassword(password: string, storedHash: string): Prom
   }
   return argon2Verify(storedHash, password);
 }
+
+/**
+ * Hash Argon2id factice, utilisé quand l'email de connexion est inconnu.
+ *
+ * Calculé UNE fois (pas à chaque requête) avec les paramètres par défaut
+ * de hashPasswordArgon2() — m=65536, t=3, p=4 — à partir d'un secret
+ * aléatoire de 32 octets aussitôt jeté : aucun mot de passe connu ne lui
+ * correspond. Ce n'est pas un secret. Si les paramètres de
+ * hashPasswordArgon2() changent, régénérer cette constante avec :
+ *   node -e "require('argon2').hash(require('crypto').randomBytes(32).toString('base64'),{type:2}).then(console.log)"
+ */
+const DUMMY_ARGON2_HASH =
+  "$argon2id$v=19$m=65536,p=4,t=3$hEnS+0PA3Vj62YCwdVQJcQ$bNW9ZlpWVngopVZxGBiWx422RnzGOmljtFfL3c/ou3U";
+
+/**
+ * Vérification Argon2id factice pour un email inconnu : coûte le même
+ * calcul qu'une vraie vérification Argon2id, afin que le temps de
+ * réponse ne révèle pas si le compte existe. Retourne toujours false.
+ */
+export async function verifyDummyPassword(password: string): Promise<false> {
+  await argon2Verify(DUMMY_ARGON2_HASH, password).catch(() => false);
+  return false;
+}

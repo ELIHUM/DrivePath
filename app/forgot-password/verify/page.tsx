@@ -119,6 +119,7 @@ export default function VerifyPage() {
         switch (data.error) {
           case "expired": setError("Ce code a expiré. Veuillez en demander un nouveau."); break;
           case "used":    setError("Ce code a déjà été utilisé. Veuillez en demander un nouveau."); break;
+          case "locked":  setError("Trop de tentatives. Demandez un nouveau code."); break;
           default:        setError("Code incorrect. Vérifiez et réessayez.");
         }
       }
@@ -141,12 +142,25 @@ export default function VerifyPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
-      const data = await res.json() as { ok: boolean; sentAt?: number; remainingMs?: number };
+      const data = await res.json().catch(() => null) as
+        { ok?: boolean; sentAt?: number; remainingMs?: number } | null;
 
       if (res.status === 429) {
-        // Le serveur applique encore un cooldown
-        const remaining = data.remainingMs ? Math.ceil(data.remainingMs / 1000) : COOLDOWN_S;
+        // Le serveur applique encore un cooldown — comportement inchangé
+        const remaining = data?.remainingMs ? Math.ceil(data.remainingMs / 1000) : COOLDOWN_S;
         setCooldown(remaining);
+        return;
+      }
+
+      /* ── Échec du renvoi (500, 502, 503…) ─────────────────────── */
+      /* Aucun e-mail n'est parti : on ne déclenche donc PAS le       */
+      /* compte à rebours de réussite, et on n'efface pas les         */
+      /* chiffres déjà saisis — un code reçu précédemment peut encore */
+      /* être valide. L'utilisateur peut retenter immédiatement ; si  */
+      /* le serveur impose encore un délai, il répondra 429 et le     */
+      /* compte à rebours sera posé par la branche ci-dessus.         */
+      if (!res.ok || !data?.ok) {
+        setError("L'envoi du code a échoué. Veuillez réessayer.");
         return;
       }
 
@@ -155,9 +169,13 @@ export default function VerifyPage() {
         try { sessionStorage.setItem("dp_reset_sent_at", String(data.sentAt)); } catch {}
       }
 
+      // Renvoi confirmé par le serveur — seulement alors on réinitialise.
       setCooldown(COOLDOWN_S);
       setDigits(["", "", "", "", "", ""]);
       inputRefs.current[0]?.focus();
+    } catch {
+      // Panne réseau ou réponse illisible — rien n'est réinitialisé.
+      setError("Une erreur est survenue. Veuillez réessayer.");
     } finally {
       setResending(false);
     }

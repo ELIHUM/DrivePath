@@ -24,14 +24,15 @@
  */
 
 import { randomBytes, createHash } from "crypto";
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, lt, sql } from "drizzle-orm";
 import { db, schema } from "@/lib/database";
 
 export const OTP_TTL_MS         = 10 * 60 * 1_000;  // 10 minutes
 export const RESET_TOKEN_TTL_MS = 15 * 60 * 1_000;  // 15 min pour changer le mot de passe
 export const OTP_COOLDOWN_MS    = 60 * 1_000;        // 60 s entre deux envois
+export const OTP_MAX_ATTEMPTS   = 5;                 // essais par code avant invalidation
 
-export type VerifyOTPResult = "valid" | "invalid" | "expired" | "used";
+export type VerifyOTPResult = "valid" | "invalid" | "expired" | "used" | "locked";
 
 /* ── Hash (jamais de valeur brute en base) ─────────────── */
 
@@ -56,6 +57,7 @@ async function getLatestOtpRow(email: string) {
       tokenHash: schema.resetTokens.tokenHash,
       expiresAt: schema.resetTokens.expiresAt,
       usedAt:    schema.resetTokens.usedAt,
+      attempts:  schema.resetTokens.attempts,
       createdAt: schema.resetTokens.createdAt,
     })
     .from(schema.resetTokens)
@@ -97,14 +99,72 @@ export async function getCooldownRemainingMs(email: string): Promise<number> {
   return remaining > 0 ? remaining : 0;
 }
 
-/** Vérifie un code OTP sans le consommer (contre le dernier code envoyé pour cet email). */
+/**
+ * Vérifie un code OTP contre le dernier code envoyé pour cet email,
+ * avec au plus OTP_MAX_ATTEMPTS essais par code. Un code valide est
+ * consommé (usedAt posé) dans la même opération.
+ *
+ * Concurrence : chaque essai réserve d'abord sa place par un UPDATE
+ * atomique (attempts + 1 WHERE attempts < max AND usedAt IS NULL AND
+ * non expiré). PostgreSQL verrouille la ligne pendant l'UPDATE et
+ * réévalue la condition : des requêtes simultanées ne peuvent jamais
+ * obtenir plus de OTP_MAX_ATTEMPTS comparaisons de hash au total, et
+ * une ligne verrouillée ou consommée ne peut plus être acceptée.
+ */
 export async function verifyOTPCode(email: string, code: string): Promise<VerifyOTPResult> {
   const row = await getLatestOtpRow(email);
   if (!row) return "invalid";
+  if (row.attempts >= OTP_MAX_ATTEMPTS) return "locked";
   if (row.usedAt) return "used";
   if (Date.now() > row.expiresAt.getTime()) return "expired";
-  if (hashValue(code.trim()) !== row.tokenHash) return "invalid";
-  return "valid";
+
+  /* ── Réserver un essai (atomique) ───────────────────── */
+  const claimed = await db
+    .update(schema.resetTokens)
+    .set({ attempts: sql`${schema.resetTokens.attempts} + 1` })
+    .where(and(
+      eq(schema.resetTokens.id, row.id),
+      isNull(schema.resetTokens.usedAt),
+      gt(schema.resetTokens.expiresAt, new Date()),
+      lt(schema.resetTokens.attempts, OTP_MAX_ATTEMPTS),
+    ))
+    .returning({ attempts: schema.resetTokens.attempts });
+
+  const attempt = claimed[0];
+  if (!attempt) {
+    // Une requête concurrente a verrouillé, consommé ou laissé expirer le code.
+    const current = await getLatestOtpRow(email);
+    if (!current || current.id !== row.id) return "invalid";
+    if (current.attempts >= OTP_MAX_ATTEMPTS) return "locked";
+    if (current.usedAt) return "used";
+    return "expired";
+  }
+
+  /* ── Code correct : consommation atomique (usage unique) ── */
+  if (hashValue(code.trim()) === row.tokenHash) {
+    const consumed = await db
+      .update(schema.resetTokens)
+      .set({ usedAt: new Date() })
+      .where(and(
+        eq(schema.resetTokens.id, row.id),
+        isNull(schema.resetTokens.usedAt),
+      ))
+      .returning({ id: schema.resetTokens.id });
+    return consumed.length > 0 ? "valid" : "used";
+  }
+
+  /* ── Code incorrect : invalidation au dernier essai autorisé ── */
+  if (attempt.attempts >= OTP_MAX_ATTEMPTS) {
+    await db
+      .update(schema.resetTokens)
+      .set({ usedAt: new Date() })
+      .where(and(
+        eq(schema.resetTokens.id, row.id),
+        isNull(schema.resetTokens.usedAt),
+      ));
+    return "locked";
+  }
+  return "invalid";
 }
 
 /** Marque le dernier OTP envoyé à cet email comme utilisé (ne peut plus être vérifié). */
